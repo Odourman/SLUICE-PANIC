@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick
-      - run: python -m pip install py65 Pillow
+      - run: python -m pip install py65==1.2.0 Pillow
       - name: Build and reproduce
         run: |
           set -o pipefail
@@ -48,9 +48,11 @@ jobs:
               stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
               pid=$!
               trap "kill $pid 2>/dev/null || true" EXIT
-              sleep 3
-              win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
-              test -n "$win"
+              sleep 5
+              win=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1 || true)
+              if [ -z "$win" ]; then win=$(xdotool search --onlyvisible --name "Stella|SLUICE|Atari" 2>/dev/null | tail -1 || true); fi
+              xwininfo -root -tree > "build/stella/$TV/windows.log"
+              if [ -z "$win" ]; then cat "build/stella/$TV/windows.log"; cat "build/stella/$TV/stella.log"; exit 1; fi
               xdotool windowfocus --sync "$win"
               import -window "$win" "build/stella/$TV/ready.png"
               xdotool key F12
