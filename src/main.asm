@@ -2,18 +2,24 @@
 ; SLUICE PANIC! development build. DASM -f3 -DTV=0/1
     IF TV = 1
 WATER = $B2
-CARGO = $2E
-DEBRIS = $66
+COLOR_CARGO = $2E
+COLOR_DEBRIS = $66
 VBT = 73
 OST = 65
-REPEAT = 8
+MOVE_REPEAT = 8
+POSE_T = 7
+ERROR_T = 17
+BONUS_T = 25
     ELSE
 WATER = $82
-CARGO = $1E
-DEBRIS = $48
+COLOR_CARGO = $1E
+COLOR_DEBRIS = $48
 VBT = 43
 OST = 35
-REPEAT = 10
+MOVE_REPEAT = 10
+POSE_T = 8
+ERROR_T = 20
+BONUS_T = 30
     ENDIF
 VSYNC = $00
 VBLANK = $01
@@ -146,12 +152,12 @@ WaitVB:
     lda #$0E
     ldx bonusTimer
     beq HudNoBonus
-    lda #CARGO
+    lda #COLOR_CARGO
 HudNoBonus:
     ldx mode
     cpx #2
     bne HudColor
-    lda #DEBRIS
+    lda #COLOR_DEBRIS
 HudColor:
     sta COLUPF
     sta WSYNC
@@ -753,7 +759,9 @@ ResetInput:
     and #1
     bne ResetReleased
     lda resetHeld
-    bne ReadFire
+    beq LongBranch1
+    jmp ReadFire
+LongBranch1:
     inc resetHeld
     jsr NewGame
     ldy #3
@@ -766,7 +774,9 @@ ReadFire:
     lda INPT4
     bmi FireReleased
     lda fireHeld
-    bne ReadMove
+    beq LongBranch2
+    jmp ReadMove
+LongBranch2:
     inc fireHeld
     lda mode
     cmp #1
@@ -790,10 +800,12 @@ ToggleSound:
     jsr InputSound
     lda pose
     cmp #2
-    beq ReadMove
+    bne LongBranch3
+    jmp ReadMove
+LongBranch3:
     lda #1
     sta pose
-    lda #8
+    lda #POSE_T
     sta poseTimer
     jmp ReadMove
 FireReleased:
@@ -814,16 +826,20 @@ Movement:
     cmp oldDir
     bne MoveNow
     dec moveDelay
-    bne Tick
+    beq LongBranch4
+    jmp Tick
+LongBranch4:
 MoveNow:
     sta oldDir
-    lda #REPEAT
+    lda #MOVE_REPEAT
     sta moveDelay
     lda oldDir
     cmp #$20
     bne Down
     lda keeper
-    beq Tick
+    bne LongBranch5
+    jmp Tick
+LongBranch5:
     dec keeper
     jmp MoveSound
 Down:
@@ -831,7 +847,9 @@ Down:
     clc
     adc #1
     cmp active
-    bcs Tick
+    bcc LongBranch6
+    jmp Tick
+LongBranch6:
     sta keeper
 MoveSound:
     ldy #0
@@ -873,7 +891,9 @@ Existing:
     cmp #4
     bne Moving
     dec delay,x
-    bne NextObject
+    beq LongBranch7
+    jmp NextObject
+LongBranch7:
     jmp Retire
 Moving:
     lda pos,x
@@ -881,19 +901,27 @@ Moving:
     adc speed
     sta pos,x
     cmp #129
-    bcs Retire
+    bcc LongBranch8
+    jmp Retire
+LongBranch8:
     lda kind,x
     cmp #3
-    beq NextObject
+    bne LongBranch9
+    jmp NextObject
+LongBranch9:
     lda pos,x
     cmp #112
-    bcc NextObject
+    bcs LongBranch10
+    jmp NextObject
+LongBranch10:
     lda gates
     and Masks,x
     beq ShutGate
     lda kind,x
     cmp #1
-    bne Mistake
+    beq LongBranch11
+    jmp Mistake
+LongBranch11:
     lda #3
     sta kind,x
     lda #0
@@ -905,7 +933,9 @@ Moving:
 ShutGate:
     lda kind,x
     cmp #2
-    bne Mistake
+    beq LongBranch12
+    jmp Mistake
+LongBranch12:
     lda #4
     sta kind,x
     lda #112
@@ -920,18 +950,18 @@ ShutGate:
 Success:
     jsr EventSound
     jsr AddScore
-    lda #CARGO
+    lda #COLOR_CARGO
     jsr Flash
     jsr CountOutcome
     jmp NextObject
 Mistake:
     lda #1
     sta dirty
-    lda #DEBRIS
+    lda #COLOR_DEBRIS
     jsr Flash
     lda #2
     sta pose
-    lda #20
+    lda #ERROR_T
     sta poseTimer
     dec lives
     ldy #5
@@ -951,8 +981,17 @@ Retire:
     sta kind,x
     jsr Random
     and #31
+    ldy level
+    cpy #8
+    bcc NormalDelay
+    lsr
+    clc
+    adc #10
+    bne StoreDelay
+NormalDelay:
     clc
     adc #15
+StoreDelay:
     sta delay,x
 NextObject:
     inx
@@ -972,7 +1011,7 @@ RandomStore:
 Flash:
     sta flashColor
     stx flashLane
-    lda #8
+    lda #POSE_T
     sta flashTimer
     rts
 CountOutcome:
@@ -987,7 +1026,7 @@ CountOutcome:
     lda #5
     sta addMid
     jsr AddScore
-    lda #30
+    lda #BONUS_T
     sta bonusTimer
     ldy #4
     jsr EventSound
@@ -1139,7 +1178,7 @@ InputFreq: .byte 20,8,16
 EventFreq: .byte 0,5,13,9,3,24,30
 EventCtrl: .byte 0,4,4,4,4,8,8
 EventLen: .byte 0,8,8,12,30,20,45
-ObjColor: .byte 0,CARGO,DEBRIS,CARGO,DEBRIS
+ObjColor: .byte 0,COLOR_CARGO,COLOR_DEBRIS,COLOR_CARGO,COLOR_DEBRIS
 KeeperTable: .byte <keeper_idle,<keeper_operate,<keeper_error
 ObjectTable: .byte <Blank,<cargo,<debris,<cargo,<debris_hit
 GlyphL1: .byte 14,10,10,10,14,4,12,4,4,14,14,2,14,8,14,14,2,14,2,14,10,10,14,2,2,14,8,14,2,14,14,8,14,10,14,14,2,2,2,2,14,10,14,10,14,14,10,14,2,14
