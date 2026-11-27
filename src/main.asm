@@ -142,10 +142,14 @@ Frame:
     jsr Position
     jsr PrepareHUD
 WaitVB:
+    ; Poll on a fixed raster phase; threshold spans > one scanline.
+    sta WSYNC
     lda INTIM
-    bne WaitVB
+    cmp #2
+    bcs WaitVB
     sta WSYNC
     sta WSYNC
+    lda #0
     sta VBLANK
     sta COLUBK
     sta PF0
@@ -653,8 +657,10 @@ FooterLoop:
     sta TIM64T
     jsr Update
 WaitOS:
+    sta WSYNC
     lda INTIM
-    bne WaitOS
+    cmp #2
+    bcs WaitOS
     sta WSYNC
     sta WSYNC
     jmp Frame
