@@ -9,7 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils
       - run: python -m pip install py65==1.2.0 Pillow
       - name: Build and reproduce
         run: |
@@ -44,7 +46,7 @@ jobs:
             mkdir -p "build/stella/$TV"
             xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
               set -eu
-              export SDL_AUDIODRIVER=dummy
+              export SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11
               stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
               pid=$!
               trap "kill $pid 2>/dev/null || true" EXIT
@@ -56,11 +58,14 @@ jobs:
               xdotool windowfocus --sync "$win"
               import -window "$win" "build/stella/$TV/ready.png"
               xdotool key F12
+              sleep 0.2
               xdotool keydown space
               sleep 0.15
               xdotool keyup space
               sleep 0.9
               import -window "$win" "build/stella/$TV/gameplay.png"
+              xdotool key F12
+              sleep 0.2
               xdotool keydown Down
               sleep 0.18
               xdotool keyup Down
@@ -85,6 +90,13 @@ jobs:
               im=Image.open(p).convert("RGB")
               print(p,im.size,len(im.getcolors(im.width*im.height)))
           PY
+      - name: Archive exact checked-out source and checksums
+        if: always()
+        run: |
+          mkdir -p build
+          git rev-parse HEAD > build/source_commit.txt
+          git archive --format=zip HEAD > build/source.zip
+          (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
