@@ -145,6 +145,7 @@ WaitVB:
     lda INTIM
     bne WaitVB
     sta WSYNC
+    sta WSYNC
     sta VBLANK
     sta COLUBK
     sta PF0
@@ -654,6 +655,7 @@ FooterLoop:
 WaitOS:
     lda INTIM
     bne WaitOS
+    sta WSYNC
     sta WSYNC
     jmp Frame
 Position:
