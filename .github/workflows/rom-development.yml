@@ -1,0 +1,35 @@
+name: ROM development
+on:
+  push:
+    branches: ['feature/full-game-development']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb
+      - name: Build and reproduce
+        run: |
+          mkdir -p build
+          dasm src/main.asm -f3 -DTV=0 -obuild/SLUICE_PANIC_NTSC.bin -lbuild/NTSC.lst -sbuild/NTSC.sym | tee build/NTSC.log
+          dasm src/main.asm -f3 -DTV=1 -obuild/SLUICE_PANIC_PAL.bin -lbuild/PAL.lst -sbuild/PAL.sym | tee build/PAL.log
+          dasm src/main.asm -f3 -DTV=0 -obuild/rebuild_NTSC.bin
+          dasm src/main.asm -f3 -DTV=1 -obuild/rebuild_PAL.bin
+          cmp build/SLUICE_PANIC_NTSC.bin build/rebuild_NTSC.bin
+          cmp build/SLUICE_PANIC_PAL.bin build/rebuild_PAL.bin
+          python3 - <<'PY'
+          from pathlib import Path
+          for p in Path('build').glob('*.bin'):
+              b=p.read_bytes()
+              assert len(b)==4096, (p,len(b))
+              assert b[-6:]==bytes([0,240])*3, (p,b[-6:])
+              print(p, 'BUILD_PASS', len(b))
+          PY
+          sha256sum build/SLUICE*.bin | tee build/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sluice-development-build
+          path: build/
