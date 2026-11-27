@@ -13,7 +13,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y dasm stella xvfb xdotool
+          sudo apt-get install -y dasm stella xvfb xdotool imagemagick
           python -m pip install Pillow
       - name: Generate assets and diagnostic
         working-directory: graphics/V1
@@ -40,11 +40,18 @@ jobs:
               sleep 4
               win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
               xdotool windowfocus --sync "$win"
-              xdotool key F12
+              import -window "$win" "evidence/stella/$TV/window_frame1.png"
               sleep 1
-              xdotool key F12
+              import -window "$win" "evidence/stella/$TV/window_frame2.png"
+              xdotool key alt+l
               sleep 1
-              find "evidence/stella/$TV" -name "*.png" | grep -q .
+              import -window "$win" "evidence/stella/$TV/window_stats.png"
+              xdotool key alt+l
+              xdotool key F12 || true
+              sleep 1
+              find "evidence/stella/$TV" -name "*.png" -print
+              kill "$pid" || true
+              wait "$pid" || true
             '
           done
       - uses: actions/upload-artifact@v4
