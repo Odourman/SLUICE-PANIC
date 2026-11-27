@@ -9,9 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb
+      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick
+      - run: python -m pip install py65 Pillow
       - name: Build and reproduce
         run: |
+          set -o pipefail
           mkdir -p build
           dasm src/main.asm -f3 -DTV=0 -obuild/SLUICE_PANIC_NTSC.bin -lbuild/NTSC.lst -sbuild/NTSC.sym | tee build/NTSC.log
           dasm src/main.asm -f3 -DTV=1 -obuild/SLUICE_PANIC_PAL.bin -lbuild/PAL.lst -sbuild/PAL.sym | tee build/PAL.log
@@ -28,6 +30,59 @@ jobs:
               print(p, 'BUILD_PASS', len(b))
           PY
           sha256sum build/SLUICE*.bin | tee build/SHA256SUMS.txt
+      - name: Actual ROM CPU and timing model
+        run: |
+          set -o pipefail
+          python tests/rom_cpu.py | tee build/cpu-tests.log
+      - name: Native Stella captures
+        if: always()
+        run: |
+          set -eu
+          dpkg-query -W dasm stella > build/versions.txt
+          for tv in NTSC PAL; do
+            export TV="$tv"
+            mkdir -p "build/stella/$TV"
+            xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
+              set -eu
+              export SDL_AUDIODRIVER=dummy
+              stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
+              pid=$!
+              trap "kill $pid 2>/dev/null || true" EXIT
+              sleep 3
+              win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
+              test -n "$win"
+              xdotool windowfocus --sync "$win"
+              import -window "$win" "build/stella/$TV/ready.png"
+              xdotool key F12
+              xdotool keydown space
+              sleep 0.15
+              xdotool keyup space
+              sleep 0.9
+              import -window "$win" "build/stella/$TV/gameplay.png"
+              xdotool keydown Down
+              sleep 0.18
+              xdotool keyup Down
+              xdotool key space
+              xdotool key alt+l
+              sleep 0.6
+              import -window "$win" "build/stella/$TV/stats.png"
+              xdotool key alt+l
+              sleep 13
+              import -window "$win" "build/stella/$TV/late.png"
+              xdotool key F2
+              sleep 0.2
+              import -window "$win" "build/stella/$TV/reset.png"
+              kill "$pid" || true
+              wait "$pid" || true
+            '
+          done
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          for p in Path("build/stella").rglob("*.png"):
+              im=Image.open(p).convert("RGB")
+              print(p,im.size,len(im.getcolors(im.width*im.height)))
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
