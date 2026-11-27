@@ -10,6 +10,7 @@ MOVE_REPEAT = 8
 POSE_T = 7
 ERROR_T = 17
 BONUS_T = 25
+INPUT_T = 3
     ELSE
 WATER = $82
 COLOR_CARGO = $1E
@@ -20,6 +21,7 @@ MOVE_REPEAT = 10
 POSE_T = 8
 ERROR_T = 20
 BONUS_T = 30
+INPUT_T = 4
     ENDIF
 VSYNC = $00
 VBLANK = $01
@@ -97,6 +99,9 @@ h4      ds 5
 lifeL   ds 1
 lifeR   ds 1
 speed   ds 1
+motionPhase ds 1
+stepSpeed ds 1
+errorKind ds 1
 ramEnd  ds 0
     SEG CODE
     ORG $F000
@@ -699,6 +704,9 @@ NewGame:
     sta AUDV0
     sta AUDV1
     sta phase
+    sta motionPhase
+    sta oldDir
+    sta moveDelay
     lda #3
     sta lives
     lda #2
@@ -766,7 +774,15 @@ LongBranch1:
     jsr NewGame
     ldy #3
     jsr EventSound
-    jmp ReadFire
+    lda INPT4
+    bmi ResetNoFire
+    lda #1
+    sta fireHeld
+    rts
+ResetNoFire:
+    lda #0
+    sta fireHeld
+    rts
 ResetReleased:
     lda #0
     sta resetHeld
@@ -870,6 +886,7 @@ Tick:
     rts
 RunTick:
     ENDIF
+    inc motionPhase
     ldx #0
 ObjectLoop:
     lda kind,x
@@ -889,16 +906,40 @@ Spawn:
     jmp NextObject
 Existing:
     cmp #4
+    beq HoldHit
+    cmp #5
     bne Moving
+HoldHit:
     dec delay,x
     beq LongBranch7
     jmp NextObject
 LongBranch7:
     jmp Retire
 Moving:
+    lda speed
+    sta stepSpeed
+    lda level
+    cmp #4
+    bcc BaseStep
+    cmp #7
+    bcs LateStep
+    lda motionPhase
+    and #1
+    beq BaseStep
+    inc stepSpeed
+    jmp BaseStep
+LateStep:
+    cmp #12
+    bcc BaseStep
+    txa
+    eor motionPhase
+    and #1
+    beq BaseStep
+    inc stepSpeed
+BaseStep:
     lda pos,x
     clc
-    adc speed
+    adc stepSpeed
     sta pos,x
     cmp #129
     bcc LongBranch8
@@ -906,7 +947,7 @@ Moving:
 LongBranch8:
     lda kind,x
     cmp #3
-    bne LongBranch9
+    bcc LongBranch9
     jmp NextObject
 LongBranch9:
     lda pos,x
@@ -955,6 +996,8 @@ Success:
     jsr CountOutcome
     jmp NextObject
 Mistake:
+    lda kind,x
+    sta errorKind
     lda #1
     sta dirty
     lda #COLOR_DEBRIS
@@ -969,12 +1012,27 @@ Mistake:
     jsr CountOutcome
     jsr ClearObjects
     lda lives
-    bne MistakeReturn
+    bne ErrorDisplay
     lda #2
     sta mode
     ldy #6
     jsr EventSound
-MistakeReturn:
+    rts
+ErrorDisplay:
+    ldx flashLane
+    lda #112
+    sta pos,x
+    lda errorKind
+    cmp #1
+    bne ErrorPassed
+    lda #5
+    sta kind,x
+    lda #7
+    sta delay,x
+    rts
+ErrorPassed:
+    lda #6
+    sta kind,x
     rts
 Retire:
     lda #0
@@ -1009,9 +1067,24 @@ RandomStore:
     sta rng
     rts
 Flash:
+    cmp #COLOR_DEBRIS
+    beq FlashError
+    ldy flashTimer
+    beq FlashStore
+    ldy flashColor
+    cpy #COLOR_DEBRIS
+    beq FlashDone
+FlashStore:
     sta flashColor
     stx flashLane
     lda #POSE_T
+    sta flashTimer
+FlashDone:
+    rts
+FlashError:
+    sta flashColor
+    stx flashLane
+    lda #ERROR_T
     sta flashTimer
     rts
 CountOutcome:
@@ -1031,6 +1104,8 @@ CountOutcome:
     ldy #4
     jsr EventSound
 NoBonus:
+    ldy #3
+    jsr EventSound
     lda #0
     sta dirty
     lda level
@@ -1045,7 +1120,7 @@ MaxLevel:
     rts
 Faster:
     lda level
-    cmp #5
+    cmp #7
     bcc RoundDone
     lda #2
     sta speed
@@ -1078,7 +1153,7 @@ InputSound:
     sta AUDC0
     lda #5
     sta AUDV0
-    lda #4
+    lda #INPUT_T
     sta snd0
     rts
 EventSound:
@@ -1177,10 +1252,14 @@ LivesR: .byte 0,0,$10,$D0
 InputFreq: .byte 20,8,16
 EventFreq: .byte 0,5,13,9,3,24,30
 EventCtrl: .byte 0,4,4,4,4,8,8
+    IF TV = 1
+EventLen: .byte 0,7,7,10,25,17,38
+    ELSE
 EventLen: .byte 0,8,8,12,30,20,45
-ObjColor: .byte 0,COLOR_CARGO,COLOR_DEBRIS,COLOR_CARGO,COLOR_DEBRIS
+    ENDIF
+ObjColor: .byte 0,COLOR_CARGO,COLOR_DEBRIS,COLOR_CARGO,COLOR_DEBRIS,COLOR_CARGO,COLOR_DEBRIS
 KeeperTable: .byte <keeper_idle,<keeper_operate,<keeper_error
-ObjectTable: .byte <Blank,<cargo,<debris,<cargo,<debris_hit
+ObjectTable: .byte <Blank,<cargo,<debris,<cargo,<debris_hit,<cargo_hit,<debris
 GlyphL1: .byte 14,10,10,10,14,4,12,4,4,14,14,2,14,8,14,14,2,14,2,14,10,10,14,2,2,14,8,14,2,14,14,8,14,10,14,14,2,2,2,2,14,10,14,10,14,14,10,14,2,14
 GlyphL2: .byte 7,5,5,5,7,2,3,2,2,7,7,4,7,1,7,7,4,7,4,7,5,5,7,4,4,7,1,7,4,7,7,1,7,5,7,7,4,4,4,4,7,5,7,5,7,7,5,7,4,7
 GlyphL3: .byte 112,80,80,80,112,32,48,32,32,112,112,64,112,16,112,112,64,112,64,112,80,80,112,64,64,112,16,112,64,112,112,16,112,80,112,112,64,64,64,64,112,80,112,80,112,112,80,112,64,112
