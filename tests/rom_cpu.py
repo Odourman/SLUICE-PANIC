@@ -1,5 +1,5 @@
 """Execute actual DASM ROM bytes with py65, an approximate RIOT/WSYNC bus.
-Not a TIA pixel, Stella, or hardware verification. Direct RAM setups are explicit.
+Not a TIA pixel, Stella, or hardware verification. RIOT floor countdown calibrated against native Stella raster observation. Direct RAM setups are explicit.
 """
 import re, sys, random, json
 from pathlib import Path
@@ -21,7 +21,7 @@ class Bus:
                 if not self.timer_wait and self.timer_start is not None:
                     self.timer_usage.append(self.c-self.timer_start); self.timer_wait=True
                 d=self.timer-self.c
-                return ((d+63)//64 if d>0 else 0 if d>-64 else (d+64)%256)&255
+                return (d//64 if d>=0 else d%256)&255
             return 0
         if a&15==12: return self.fire
         return 0
