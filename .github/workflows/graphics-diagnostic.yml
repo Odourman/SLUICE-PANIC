@@ -13,7 +13,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y dasm
+          sudo apt-get install -y dasm stella xvfb xdotool
           python -m pip install Pillow
       - name: Generate assets and diagnostic
         working-directory: graphics/V1
@@ -24,6 +24,29 @@ jobs:
           echo 'c52fe702c45291f596a2d360b819c5d3eb7c3a792ddaa0a7830572237f21f99c  experimental_roms/SLUICE_PANIC_GRAPHICS_DIAGNOSTIC_NTSC.bin' | sha256sum -c
           echo 'a0479e012a70e8709a30a982801bf9235df9bedfcfcd576a844887e01c814dda  experimental_roms/SLUICE_PANIC_GRAPHICS_DIAGNOSTIC_PAL.bin' | sha256sum -c
           sh asm/build.sh
+      - name: Capture native Stella snapshots
+        working-directory: graphics/V1
+        run: |
+          mkdir -p evidence/stella/NTSC evidence/stella/PAL
+          dpkg-query -W stella dasm > evidence/stella/versions.txt
+          for tv in NTSC PAL; do
+            export TV="$tv"
+            xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
+              set -eu
+              export SDL_AUDIODRIVER=dummy
+              stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/evidence/stella/$TV" "$PWD/experimental_roms/SLUICE_PANIC_GRAPHICS_DIAGNOSTIC_$TV.bin" > "evidence/stella/$TV/stella.log" 2>&1 &
+              pid=$!
+              trap "kill $pid 2>/dev/null || true" EXIT
+              sleep 4
+              win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
+              xdotool windowfocus --sync "$win"
+              xdotool key F12
+              sleep 1
+              xdotool key F12
+              sleep 1
+              find "evidence/stella/$TV" -name "*.png" | grep -q .
+            '
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
