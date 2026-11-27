@@ -1,0 +1,32 @@
+name: Graphics diagnostic build
+on:
+  push:
+    branches: [graphics/initial-complete-design]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dasm
+          python -m pip install Pillow
+      - name: Generate assets and diagnostic
+        working-directory: graphics/V1
+        run: |
+          mkdir -p sprites animations palettes playfields mockups asm experimental_roms evidence
+          python scripts/diagnostic.py
+          sha256sum experimental_roms/*.bin
+          echo 'c52fe702c45291f596a2d360b819c5d3eb7c3a792ddaa0a7830572237f21f99c  experimental_roms/SLUICE_PANIC_GRAPHICS_DIAGNOSTIC_NTSC.bin' | sha256sum -c
+          echo 'a0479e012a70e8709a30a982801bf9235df9bedfcfcd576a844887e01c814dda  experimental_roms/SLUICE_PANIC_GRAPHICS_DIAGNOSTIC_PAL.bin' | sha256sum -c
+          sh asm/build.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graphics-diagnostic-evidence
+          path: |
+            graphics/V1/evidence/
+            graphics/V1/experimental_roms/
+            graphics/V1/mockups/

@@ -1,0 +1,83 @@
+{
+  "size": [
+    160,
+    192
+  ],
+  "hud": [
+    0,
+    23
+  ],
+  "lane_starts": [
+    24,
+    64,
+    104,
+    144
+  ],
+  "bank_top": [
+    0,
+    7
+  ],
+  "water": [
+    8,
+    35
+  ],
+  "bank_bottom": [
+    36,
+    39
+  ],
+  "edge_x": [
+    [
+      0,
+      7
+    ],
+    [
+      152,
+      159
+    ]
+  ],
+  "gate_x": [
+    120,
+    123
+  ],
+  "gate_caps_y": [
+    8,
+    9,
+    34,
+    35
+  ],
+  "closed_gate_y": [
+    8,
+    35
+  ],
+  "keeper_x": 136,
+  "sprite_y_offset": 12,
+  "object_x_range": [
+    8,
+    128
+  ],
+  "decision_x": 112,
+  "object_end_x": 128,
+  "initial_active_lanes": [
+    0,
+    1
+  ],
+  "pf_reflected_edge": [
+    48,
+    0,
+    0
+  ],
+  "ctrlpf_game": 33,
+  "ctrlpf_hud": 0,
+  "digits": [
+    "75557",
+    "26227",
+    "71747",
+    "71717",
+    "55711",
+    "74717",
+    "74757",
+    "71111",
+    "75757",
+    "75717"
+  ]
+}
