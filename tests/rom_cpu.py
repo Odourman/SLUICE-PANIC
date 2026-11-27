@@ -19,7 +19,7 @@ class Bus:
             if a==0x282: return self.reset
             if a==0x284:
                 d=self.timer-self.c
-                return (d//64 if d>=0 else d%256)&255
+                return ((d+63)//64 if d>0 else 0 if d>-64 else (d+64)%256)&255
             return 0
         if a&15==12: return self.fire
         return 0
