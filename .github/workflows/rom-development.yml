@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils
+      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils ffmpeg curl unzip
       - run: python -m pip install py65==1.2.0 Pillow
       - name: Build and reproduce
         run: |
@@ -90,6 +90,15 @@ jobs:
               im=Image.open(p).convert("RGB")
               print(p,im.size,len(im.getcolors(im.width*im.height)))
           PY
+      - name: Actual Stella libretro gameplay and PCM
+        if: always()
+        run: |
+          set -eu
+          curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella.zip -d /tmp/stella-core
+          for tv in NTSC PAL; do
+            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv"
+          done
       - name: Archive exact checked-out source and checksums
         if: always()
         run: |
