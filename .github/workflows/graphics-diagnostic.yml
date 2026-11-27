@@ -2,6 +2,8 @@ name: Graphics diagnostic build
 on:
   push:
     branches: [graphics/initial-complete-design]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   build:
