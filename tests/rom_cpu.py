@@ -9,7 +9,7 @@ class Bus:
         self.rom=rom; self.ram=bytearray(128); self.tia=bytearray(64)
         self.c=0; self.timer=0; self.events=[]; self.frames=[]
         self.joy=255; self.fire=128; self.reset=255; self.visible_gaps=[]
-        self.last_sync=None; self.last_visible=False
+        self.last_sync=None; self.last_visible=False; self.visible_cycles=[]; self.timer_usage=[]; self.timer_start=None; self.timer_wait=False
     def __getitem__(self,a):
         a &= 0x1fff
         if a&0x1000: return self.rom[a&4095]
@@ -18,6 +18,8 @@ class Bus:
             if a==0x280: return self.joy
             if a==0x282: return self.reset
             if a==0x284:
+                if not self.timer_wait and self.timer_start is not None:
+                    self.timer_usage.append(self.c-self.timer_start); self.timer_wait=True
                 d=self.timer-self.c
                 return ((d+63)//64 if d>0 else 0 if d>-64 else (d+64)%256)&255
             return 0
@@ -33,15 +35,18 @@ class Bus:
     def after(self,cycles):
         self.c+=cycles
         for a,v in self.events:
-            if a=="timer": self.timer=self.c+v*64
+            if a=="timer":
+                self.timer=self.c+v*64; self.timer_start=self.c; self.timer_wait=False
             else:
                 if a==0 and v&2 and not self.tia[0]&2:
                     self.frames.append(self.c//76)
                 if a==2:
                     visible=not self.tia[1]&2 and not self.tia[0]&2
+                    before=self.c
                     self.c=(self.c//76+1)*76 if self.c%76 else self.c
-                    if visible and self.last_visible:
+                    if self.frames and visible and self.last_visible:
                         self.visible_gaps.append((self.c-self.last_sync)//76)
+                        self.visible_cycles.append(before-self.last_sync)
                     self.last_visible=visible; self.last_sync=self.c
                 self.tia[a]=v
         self.events.clear()
@@ -112,15 +117,39 @@ def check(tv):
     for i in range(1200):
         m.frame(joy=rng.choice([255,0xef,0xdf,0xcf]),fire=rng.randrange(5)==0,reset=i%301==0)
         assert 0<=m.get("keeper")<m.get("active")<=4 and m.get("lives")<=3
-        assert all(m.get("kind",j)<=4 for j in range(4))
+        assert all(m.get("kind",j)<=6 for j in range(4))
         assert 0<=m.score()<=999999
+    # Autonomous score-chase, reading live RAM only to choose joystick input.
+    m.frame(); m.frame(reset=True); m.frame()
+    for _ in range(7200):
+        candidates=[(m.get("pos",j),j) for j in range(m.get("active")) if m.get("kind",j) in (1,2) and bool(m.get("gates")&(1<<j)) != (m.get("kind",j)==1)]
+        joy=255; fire=False
+        if candidates:
+            _,j=max(candidates); current=m.get("keeper")
+            if j==current: fire=not m.get("fireHeld")
+            else:
+                desired=0x20 if j<current else 0x10
+                if m.get("oldDir")!=desired: joy=0xef if j<current else 0xdf
+        m.frame(joy=joy,fire=fire)
+    print(tv,"AUTOPLAY",m.score(),m.get("level"),m.get("lives"),m.get("active"),flush=True)
+    ok("autoplay four lanes",m.get("active")==4 and m.get("level")>=5 and m.get("lives")==3)
+    ok("autoplay points",m.score()>5000)
+    # Explicitly test simultaneous directed results, all 16 masks, high speed and all digits.
+    for mask in range(16):
+        m.setup(1,mask,123456)
+        m.clear(); m.set("active",4); m.set("keeper",mask%4)
+        for j in range(4):
+            m.set("kind",1 if mask&(1<<j) else 2,j); m.set("pos",110,j)
+        m.set("level",12); m.set("speed",2); m.frame()
+        expected_score=123456+sum(100 if mask&(1<<j) else 25 for j in range(4))
+        ok(f"four simultaneous outcomes mask={mask}",m.score()==expected_score and m.get("lives")==3)
     expected=262 if tv=="NTSC" else 312
     gaps=[b-a for a,b in zip(m.bus.frames,m.bus.frames[1:])]
     hist={x:gaps.count(x) for x in sorted(set(gaps))}
-    print(tv,"checks",checks,"frame histogram",hist,"visible WSYNC gaps",sorted(set(m.bus.visible_gaps)),"minSP",hex(m.minsp), "ramEnd",hex(m.syms["ramEnd"]),flush=True)
+    print(tv,"checks",checks,"frame histogram",hist,"visible WSYNC gaps",sorted(set(m.bus.visible_gaps)),"minSP",hex(m.minsp), "ramEnd",hex(m.syms["ramEnd"]),"visible max cycles",max(m.bus.visible_cycles),"timer logic max",max(m.bus.timer_usage),flush=True)
     ok("frame model",set(gaps)=={expected})
     ok("visible WSYNC model",max(m.bus.visible_gaps)==1)
     ok("stack model",m.minsp>=m.syms["ramEnd"])
-    return {"format":tv,"checks":checks,"frames":hist,"stack_min":m.minsp,"ram_end":m.syms["ramEnd"],"scope":"actual ROM CPU/approximate RIOT bus; not TIA"}
+    return {"format":tv,"checks":checks,"frames":hist,"stack_min":m.minsp,"ram_end":m.syms["ramEnd"],"visible_max_cycles":max(m.bus.visible_cycles),"timer_logic_max":max(m.bus.timer_usage),"scope":"actual ROM CPU/approximate RIOT bus; not TIA"}
 result=[check(tv) for tv in ("NTSC","PAL")]
 Path("build/cpu-tests.json").write_text(json.dumps(result,indent=2))
