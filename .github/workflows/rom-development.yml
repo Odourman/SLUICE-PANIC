@@ -1,0 +1,113 @@
+name: ROM development
+on:
+  push:
+    branches: ['feature/full-game-development']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils ffmpeg curl unzip
+      - run: python -m pip install py65==1.2.0 Pillow
+      - name: Build and reproduce
+        run: |
+          set -o pipefail
+          mkdir -p build
+          dasm src/main.asm -f3 -DTV=0 -obuild/SLUICE_PANIC_NTSC.bin -lbuild/NTSC.lst -sbuild/NTSC.sym | tee build/NTSC.log
+          dasm src/main.asm -f3 -DTV=1 -obuild/SLUICE_PANIC_PAL.bin -lbuild/PAL.lst -sbuild/PAL.sym | tee build/PAL.log
+          dasm src/main.asm -f3 -DTV=0 -obuild/rebuild_NTSC.bin
+          dasm src/main.asm -f3 -DTV=1 -obuild/rebuild_PAL.bin
+          cmp build/SLUICE_PANIC_NTSC.bin build/rebuild_NTSC.bin
+          cmp build/SLUICE_PANIC_PAL.bin build/rebuild_PAL.bin
+          python3 - <<'PY'
+          from pathlib import Path
+          for p in Path('build').glob('*.bin'):
+              b=p.read_bytes()
+              assert len(b)==4096, (p,len(b))
+              assert b[-6:]==bytes([0,240])*3, (p,b[-6:])
+              print(p, 'BUILD_PASS', len(b))
+          PY
+          sha256sum build/SLUICE*.bin | tee build/SHA256SUMS.txt
+      - name: Actual ROM CPU and timing model
+        run: |
+          set -o pipefail
+          python tests/rom_cpu.py | tee build/cpu-tests.log
+      - name: Native Stella captures
+        if: always()
+        run: |
+          set -eu
+          dpkg-query -W dasm stella > build/versions.txt
+          for tv in NTSC PAL; do
+            export TV="$tv"
+            mkdir -p "build/stella/$TV"
+            xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
+              set -eu
+              export SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11
+              stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
+              pid=$!
+              trap "kill $pid 2>/dev/null || true" EXIT
+              sleep 5
+              win=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1 || true)
+              if [ -z "$win" ]; then win=$(xdotool search --onlyvisible --name "Stella|SLUICE|Atari" 2>/dev/null | tail -1 || true); fi
+              xwininfo -root -tree > "build/stella/$TV/windows.log"
+              if [ -z "$win" ]; then cat "build/stella/$TV/windows.log"; cat "build/stella/$TV/stella.log"; exit 1; fi
+              xdotool windowfocus --sync "$win"
+              import -window "$win" "build/stella/$TV/ready.png"
+              xdotool key F12
+              sleep 0.2
+              xdotool keydown space
+              sleep 0.15
+              xdotool keyup space
+              sleep 0.9
+              import -window "$win" "build/stella/$TV/gameplay.png"
+              xdotool key F12
+              sleep 0.2
+              xdotool keydown Down
+              sleep 0.18
+              xdotool keyup Down
+              xdotool key space
+              xdotool key alt+l
+              sleep 0.6
+              import -window "$win" "build/stella/$TV/stats.png"
+              xdotool key alt+l
+              sleep 13
+              import -window "$win" "build/stella/$TV/late.png"
+              xdotool key F2
+              sleep 0.2
+              import -window "$win" "build/stella/$TV/reset.png"
+              kill "$pid" || true
+              wait "$pid" || true
+            '
+          done
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          for p in Path("build/stella").rglob("*.png"):
+              im=Image.open(p).convert("RGB")
+              print(p,im.size,len(im.getcolors(im.width*im.height)))
+          PY
+      - name: Actual Stella libretro gameplay and PCM
+        if: always()
+        run: |
+          set -eu
+          curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella.zip -d /tmp/stella-core
+          for tv in NTSC PAL; do
+            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv"
+          done
+      - name: Archive exact checked-out source and checksums
+        if: always()
+        run: |
+          mkdir -p build
+          git rev-parse HEAD > build/source_commit.txt
+          git archive --format=zip HEAD > build/source.zip
+          (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sluice-development-build
+          path: build/

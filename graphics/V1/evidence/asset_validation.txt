@@ -1,0 +1,1 @@
+PASS: 7 sprite bitmaps, bounding boxes and 300 HUD digit-slot-row PF masks; PF encode/decode exact; rendered 16 gate masks × (2+3+4 selections) = 144 model scenes; 19 named state previews. No TIA or emulator validation.
