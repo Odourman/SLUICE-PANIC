@@ -67,8 +67,8 @@ class Machine:
         self.frame()
     def get(self,k,i=0): return self.bus.ram[(self.syms[k]+i)&127]
     def set(self,k,v,i=0): self.bus.ram[(self.syms[k]+i)&127]=v
-    def frame(self,joy=255,fire=False,reset=False):
-        self.bus.joy=joy; self.bus.fire=0 if fire else 128; self.bus.reset=254 if reset else 255
+    def frame(self,joy=255,fire=False,reset=False,select=False):
+        self.bus.joy=joy; self.bus.fire=0 if fire else 128; self.bus.reset=255-(1 if reset else 0)-(2 if select else 0)
         n=len(self.bus.frames)
         for _ in range(20000):
             old=self.cpu.processorCycles
@@ -103,6 +103,27 @@ def check(tv):
     m.ticks(3)
     ok("all four startup banks",True)
     ok("power-on ready",m.get("mode")==0 and m.get("lives")==3 and m.score()==0)
+    e=Machine(tv);e.ticks(3)
+    e.frame(select=True)
+    ok("SELECT chooses expert",e.get("variant")==1 and e.get("mode")==0 and e.get("active")==4)
+    e.ticks(3,select=True)
+    ok("SELECT edge only",e.get("variant")==1)
+    e.frame();e.frame(fire=True)
+    ok("expert starts level seven",e.get("mode")==1 and e.get("level")==7 and e.get("speed")==2)
+    e.setup(1,1,123400);e.frame()
+    ok("session best",e.score()==123500 and [e.get("sessionBest",i) for i in range(3)]==[0,0x35,0x12])
+    e.frame(reset=True)
+    ok("session best persists reset",e.score()==0 and e.get("sessionBest",2)==0x12 and e.get("variant")==1)
+    e.setup(1,1,0,lives=2);e.set("level",4);e.set("roundN",1);e.frame()
+    ok("clean fourth-round extra life",e.get("lives")==3 and e.score()==600)
+    e.setup(1,1,0);e.clear();e.set("active",4);e.set("spawnGap",0)
+    for j in range(4):e.set("delay",0,j)
+    e.frame()
+    ok("staggered simultaneous spawn",sum(bool(e.get("kind",j)) for j in range(4))==1)
+    e.ticks(5)
+    ok("spawn cooldown",sum(bool(e.get("kind",j)) for j in range(4))==1)
+    for b in range(4):
+        assert len(e.bus.rom[b*4096:(b+1)*4096])==4096
     m.frame(fire=True); ok("fire starts",m.get("mode")==1)
     m.ticks(4,fire=True); ok("held start does not toggle",m.get("gates")==0)
     m.frame(); m.frame(fire=True); ok("toggle once",m.get("gates")==1)
