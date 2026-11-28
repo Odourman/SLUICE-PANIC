@@ -3,7 +3,7 @@ from pathlib import Path
 import sys,subprocess,hashlib,json
 a=Path("src/main.asm").read_text()
 def section(s,e):return a[a.index("\n"+s+":")+1:a.index("\n"+e+":")+1]
-head=a[:a.index("Reset:")].replace("ramEnd  ds 0","spawnGap ds 1\nobjectPtr ds 4\nthemeWater ds 1\nhudValid ds 1\nhudMode ds 1\nhudLives ds 1\nhudScore ds 3\naudioTmp ds 1\nvariant ds 1\nselectHeld ds 1\nsessionBest ds 3\nramEnd ds 0")
+head=a[:a.index("Reset:")].replace("digit   ds 6", "digit = lane").replace("ramEnd  ds 0","spawnGap ds 1\nobjectPtr ds 4\nthemeWater ds 1\nhudValid ds 1\nhudMode ds 1\nhudLives ds 1\nhudScore ds 3\naudioTmp ds 1\nvariant ds 1\nselectHeld ds 1\nsessionBest ds 3\nramEnd ds 0")
 stub="""
     IF * > $FFC0
     ERR
