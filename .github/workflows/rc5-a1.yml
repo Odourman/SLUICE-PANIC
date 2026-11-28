@@ -1,0 +1,86 @@
+name: RC5-A1 isolated playable checkpoint
+on:
+  push:
+    branches: [feature/rc5-playable-redesign]
+    paths: ['tools/build_rc5_a1.py', '.github/workflows/rc5-a1.yml', 'docs/RC5_A1.md']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checkpoint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dasm curl unzip ffmpeg libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+          python -m pip install Pillow
+      - name: Two clean native builds and RC4 differential gate
+        run: |
+          set -euxo pipefail
+          BASE=cef328950e82a86b104cb05226f6f6e02d170553
+          git merge-base --is-ancestor "$BASE" HEAD
+          git diff --exit-code "$BASE" HEAD -- src tools/build_rc2.py graphics/V1 tests
+          mkdir -p /tmp/rc5a /tmp/rc5b /tmp/rc4 build
+          git archive HEAD | tar -x -C /tmp/rc5a
+          git archive HEAD | tar -x -C /tmp/rc5b
+          git archive "$BASE" | tar -x -C /tmp/rc4
+          (cd /tmp/rc4 && python tools/build_rc2.py build) | tee build/rc4_native.log
+          (cd /tmp/rc5a && python tools/build_rc5_a1.py build) | tee build/native_a.log
+          (cd /tmp/rc5b && python tools/build_rc5_a1.py build) | tee build/native_b.log
+          cp -a /tmp/rc5a/build/. build/
+          python - <<'PY'
+          import hashlib, pathlib, json
+          p=pathlib.Path('build'); r=pathlib.Path('/tmp/rc4/build'); b=pathlib.Path('/tmp/rc5b/build')
+          allowed={1:[(0x3eb,0x3f2),(0x90a,0x950),(0x982,0x996)],2:[(0x23c,0x240)],3:[(0x07b,0x07f)]}
+          results={}
+          for tv,expected in [('NTSC','09a208e3649fe86464120a4d6456d052aade9c2444f9f23d1da9f20f9592ce9c'),('PAL','ae456e3d6ae961ca0b5fa0af71f73cc52adfee3c6c04d31b888610e26ea3e274')]:
+              f=f'SLUICE_PANIC_{tv}.bin'
+              old=(r/f).read_bytes(); new=(p/f).read_bytes()
+              assert hashlib.sha256(old).hexdigest()==expected
+              assert len(new)==16384 and new==(b/f).read_bytes()
+              changes=[i for i,(a,c) in enumerate(zip(old,new)) if a!=c]
+              assert changes and all(any(lo<=i%4096<hi for lo,hi in allowed.get(i//4096,[])) for i in changes),changes
+              assert old[:4096]==new[:4096]
+              (p/f'SLUICE_PANIC_RC5_A1_{tv}.bin').write_bytes(new)
+              results[tv]={'sha256':hashlib.sha256(new).hexdigest(),'changed_bytes':len(changes),'changed_offsets':changes,'bank0_identical':True}
+          (p/'data_only_diff.json').write_text(json.dumps(results,indent=2))
+          PY
+          git rev-parse HEAD > build/source_commit.txt
+          git archive --format=zip HEAD > build/source.zip
+          git diff "$BASE" HEAD > build/RC4_to_A1.diff
+          dpkg-query -W dasm > build/tool_versions.txt
+      - name: Stella actual NTSC gameplay
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 3 -o /tmp/stella-core.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella-core.zip -d /tmp/stella-core
+          sha256sum /tmp/stella-core/stella_libretro.so > build/stella_core.sha256
+          python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom build/SLUICE_PANIC_RC5_A1_NTSC.bin --sym build/NTSC.sym --out build/stella/NTSC --stress-frames 3600
+      - name: Gopher deterministic NTSC regression
+        run: |
+          set -euxo pipefail
+          mkdir -p build/gopher
+          curl -fsSL --retry 3 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          sha256sum /tmp/gopher2600 > build/gopher/core.sha256
+          /tmp/gopher2600 version | tee build/gopher/version.txt
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_RC5_A1_NTSC.bin" | tee build/gopher/add.log
+          /tmp/gopher2600 regress run | tee build/gopher/run.log
+          grep -Eiq '1 success' build/gopher/run.log
+          grep -Eiq '0 fail' build/gopher/run.log
+      - name: Evidence manifest
+        if: always()
+        run: |
+          if [ -d build ]; then (cd build && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt); fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RC5_A1_NATIVE_AND_GAMEPLAY_EVIDENCE
+          path: build/
+          if-no-files-found: error
