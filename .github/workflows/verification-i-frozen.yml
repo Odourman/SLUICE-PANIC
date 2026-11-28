@@ -1,0 +1,71 @@
+name: Independent frozen ROM reproduction
+on:
+  pull_request:
+    branches: ['feature/rc3-final-correction-polish']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'verification/rc3-vs-health-lab-d-independent'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: RC3
+            commit: f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6
+            ntsc: 6facbb074765f32d5ca4416beb50acfdbfc8b9b418855152ae81c722494f0b06
+            pal: d1fd128b07d507a034f2f61cd4acf7ef1c4607c7e476c4d61503ccf3a641af49
+          - name: LAB_D
+            commit: 72d2ca6fc6e8f2de96f4a1cb1b897d1e05b848c3
+            ntsc: 09a208e3649fe86464120a4d6456d052aade9c2444f9f23d1da9f20f9592ce9c
+            pal: ae456e3d6ae961ca0b5fa0af71f73cc52adfee3c6c04d31b888610e26ea3e274
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - name: Native DASM
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dasm libsdl2-2.0-0 libgl1 libasound2t64 xvfb
+          mkdir -p evidence
+          dpkg-query -W dasm | tee evidence/dasm-version.txt
+          sha256sum "$(command -v dasm)" | tee evidence/dasm-sha256.txt
+          git rev-parse HEAD | tee evidence/source-commit.txt
+          test "$(git rev-parse HEAD)" = "${{ matrix.commit }}"
+      - name: Clean independent reproduction twice
+        run: |
+          set -euxo pipefail
+          test ! -e build-a
+          test ! -e build-b
+          python tools/build_rc2.py build-a | tee evidence/build-a.log
+          python tools/build_rc2.py build-b | tee evidence/build-b.log
+          for tv in NTSC PAL; do
+            cmp "build-a/SLUICE_PANIC_$tv.bin" "build-b/SLUICE_PANIC_$tv.bin"
+            test "$(wc -c < "build-a/SLUICE_PANIC_$tv.bin")" -eq 16384
+          done
+          echo "${{ matrix.ntsc }}  build-a/SLUICE_PANIC_NTSC.bin" | sha256sum -c
+          echo "${{ matrix.pal }}  build-a/SLUICE_PANIC_PAL.bin" | sha256sum -c
+          sha256sum build-a/*.bin | tee evidence/rom-bank-sha256.txt
+      - name: Gopher2600 second-implementation smoke
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          sha256sum /tmp/gopher2600 | tee evidence/gopher-sha256.txt
+          /tmp/gopher2600 version | tee evidence/gopher-version.txt
+          for tv in NTSC PAL; do
+            /tmp/gopher2600 regress add -frames 600 "$PWD/build-a/SLUICE_PANIC_$tv.bin" | tee "evidence/gopher-${tv}.log"
+          done
+          /tmp/gopher2600 regress run | tee evidence/gopher-regression.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: independent-${{ matrix.name }}
+          path: |
+            evidence/
+            build-a/
+            build-b/

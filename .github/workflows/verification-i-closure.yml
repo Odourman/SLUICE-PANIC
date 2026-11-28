@@ -1,0 +1,205 @@
+name: Targeted closure emulator and fallback evidence
+on:
+  pull_request:
+    branches: ['feature/rc3-final-correction-polish']
+    paths: ['.github/workflows/verification-i-closure.yml']
+permissions:
+  contents: read
+jobs:
+  gameplay:
+    if: github.head_ref == 'verification/rc3-vs-health-lab-d-independent'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [RC3, D, B]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.candidate == 'RC3' && 'f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6' || '72d2ca6fc6e8f2de96f4a1cb1b897d1e05b848c3' }}
+          persist-credentials: false
+      - name: Reproduce pinned ROMs
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dasm libsdl2-2.0-0 libgl1 libasound2t64 xvfb xdotool imagemagick x11-utils
+          mkdir evidence
+          git rev-parse HEAD > evidence/source-commit.txt
+          if [ "$CANDIDATE" = B ]; then
+            python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/build_rc2.py'); s=p.read_text()
+          needle='.replace("digit   ds 6", "digit = lane")'
+          assert s.count(needle)==1
+          p.write_text(s.replace(needle,''))
+          PY
+            git diff > evidence/B-exact-source-reconstruction.diff
+          fi
+          python tools/build_rc2.py build | tee evidence/build.log
+          case "$CANDIDATE" in
+            RC3) N=6facbb074765f32d5ca4416beb50acfdbfc8b9b418855152ae81c722494f0b06; P=d1fd128b07d507a034f2f61cd4acf7ef1c4607c7e476c4d61503ccf3a641af49;;
+            D) N=09a208e3649fe86464120a4d6456d052aade9c2444f9f23d1da9f20f9592ce9c; P=ae456e3d6ae961ca0b5fa0af71f73cc52adfee3c6c04d31b888610e26ea3e274;;
+            B) N=6c019ca72485dd237a9949281cd56802b0209a9b40425bfba92b675066262a6b; P=bd9c12807bad150fa460e385398ab2714738b3b8fda7b05d36d229fadfe22323;;
+          esac
+          echo "$N  build/SLUICE_PANIC_NTSC.bin" | sha256sum -c
+          echo "$P  build/SLUICE_PANIC_PAL.bin" | sha256sum -c
+          sha256sum build/*.bin > evidence/roms.sha256
+      - name: Install independent emulators
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          curl -fsSL --retry 2 -o /tmp/stella.deb https://github.com/stella-emu/stella/releases/download/7.0/stella_7.0_amd64.deb
+          sudo apt-get install -y /tmp/stella.deb
+          /tmp/gopher2600 version | tee evidence/gopher-version.txt
+          dpkg-query -W stella | tee evidence/stella-version.txt
+          sha256sum /tmp/gopher2600 "$(command -v stella)" > evidence/emulators.sha256
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Gopher actual controller and RAM differential
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch v0.55.0 https://github.com/JetSetIlly/Gopher2600.git /tmp/gopher-src
+          git -C /tmp/gopher-src rev-parse HEAD > evidence/gopher-source.txt
+          mkdir /tmp/gopher-src/closure
+          cat > /tmp/gopher-src/closure/main.go <<'GO'
+          package main
+          import (
+           "fmt"
+           "os"
+           "crypto/sha256"
+           "encoding/json"
+           "github.com/jetsetilly/gopher2600/cartridgeloader"
+           "github.com/jetsetilly/gopher2600/debugger/govern"
+           "github.com/jetsetilly/gopher2600/digest"
+           "github.com/jetsetilly/gopher2600/environment"
+           "github.com/jetsetilly/gopher2600/hardware"
+           "github.com/jetsetilly/gopher2600/hardware/riot/ports"
+           "github.com/jetsetilly/gopher2600/hardware/riot/ports/plugging"
+           "github.com/jetsetilly/gopher2600/hardware/television"
+           "github.com/jetsetilly/gopher2600/setup"
+          )
+          func check(e error) { if e!=nil {panic(e)} }
+          func main(){
+           rom,tvname,variant:=os.Args[1],os.Args[2],os.Args[3]
+           raw,e:=os.ReadFile(rom);check(e)
+           fmt.Fprintf(os.Stderr,"ROM %x TV %s candidate %s\n",sha256.Sum256(raw),tvname,variant)
+           tv,e:=television.NewTelevision(tvname);check(e);defer tv.End();tv.SetFPSLimit(false)
+           dig,e:=digest.NewVideo(tv);check(e)
+           vcs,e:=hardware.NewVCS(environment.MainEmulation,tv,nil,nil);check(e);vcs.Env.Normalise()
+           loader,e:=cartridgeloader.NewLoaderFromFilename(rom,"F6","AUTO",nil);check(e);defer loader.Close()
+           check(setup.AttachCartridge(vcs,loader,nil))
+           emit:=json.NewEncoder(os.Stdout)
+           event:=func(p plugging.PortID,ev ports.Event,d ports.EventData){ok,e:=vcs.Input.HandleInputEvent(ports.InputEvent{Port:p,Ev:ev,D:d});check(e);if !ok {panic(fmt.Sprintf("not handled %s %s",p,ev))}}
+           fire,sel,reset:=false,false,false
+           dir:=ports.Centre
+           digit:=47; // symbol-derived below; actual projection removes six legacy bytes at digit address
+           _=digit
+           for f:=0;f<3600;f++ {
+            r:=vcs.Mem.RAM.RAM
+            nf,ns,nr:=false,false,false
+            nd:=ports.Centre
+            // First 1000 frames: fixed input and deliberate unattended game over.
+            // Then select, Expert, play with bounded RAM-informed decisions every 5 frames.
+            // All actions are through controller/console input API, no memory injection.
+            switch {case f==8 || f==1050: nf=true
+            case f==1010: ns=true
+            case f==1900: nr=true
+            case f==1910: nf=true
+            case f>20&&f<140:
+             nf=f%21==0
+             if f%40<8 {nd=ports.Down}
+            case f>1060&&f<3500:
+             if r[0]!=1 {nf=f%7==0} else if f%5==0 {
+              best,j:=-1,-1
+              for k:=0;k<int(r[2])&&k<4;k++{
+               kind,pos:=r[11+k],int(r[15+k])
+               opened:=r[4]&(1<<k)!=0
+               if (kind==1&&!opened || kind==2&&opened) && pos>best{best,j=pos,k}
+              }
+              if j>=0 {if j==int(r[3]){nf=true}else if j<int(r[3]){nd=ports.Up}else{nd=ports.Down}}
+             }
+            }
+            if nf!=fire {event(plugging.PortLeft,ports.Fire,nf);fire=nf}
+            if ns!=sel {event(plugging.PortPanel,ports.PanelSelect,ns);sel=ns}
+            if nr!=reset {event(plugging.PortPanel,ports.PanelReset,nr);reset=nr}
+            if nd!=dir {if dir!=ports.Centre{event(plugging.PortLeft,dir,ports.DataStickFalse)};if nd!=ports.Centre{event(plugging.PortLeft,nd,ports.DataStickSet)};dir=nd}
+            check(vcs.RunForFrameCount(1,func()(govern.State,error){if vcs.CPU.Jammed{return govern.Ending,fmt.Errorf("CPU JAM")};return govern.Running,nil}))
+            if vcs.CPU.Jammed {panic("CPU JAM")}
+            r=vcs.Mem.RAM.RAM
+            // Logical data excludes the RC3/B obsolete digit scratch ($AF-$B4);
+            // the exact range is passed by the build symbol file through command line below.
+            var project []byte
+            if variant=="D" {project=append(project,r[:91]...)} else {
+              var digitOffset int;_,e=fmt.Sscanf(os.Args[4],"%d",&digitOffset);check(e)
+              project=append(project,r[:digitOffset]...);project=append(project,r[digitOffset+6:97]...)
+            }
+            check(emit.Encode(map[string]any{"frame":f,"tvframe":tv.GetCoords().Frame,"raster":tv.GetFrameInfo().TotalScanlines,"mode":r[0],"lives":r[1],"active":r[2],"keeper":r[3],"gates":r[4],"level":r[5],"score":fmt.Sprintf("%02x%02x%02x",r[10],r[9],r[8]),"fire":fire,"select":sel,"reset":reset,"direction":dir,"ram":fmt.Sprintf("%x",project),"video":dig.Hash()}))
+           }
+          }
+          GO
+          cp /tmp/gopher-src/closure/main.go evidence/gopher-controller.go
+          digit=$(awk '$1=="digit" {print $2; exit}' build/NTSC.sym)
+          digit=$((16#$digit-128))
+          for tv in NTSC PAL; do
+            rom="$PWD/build/SLUICE_PANIC_${tv}.bin"
+            out="$PWD/evidence/gopher_${tv}.jsonl"
+            (cd /tmp/gopher-src; go run ./closure "$rom" "$tv" "$CANDIDATE" "$digit") > "$out"
+            test "$(wc -l < "$out")" -eq 3600
+          done
+      - name: Controller-only GUI capture
+        run: |
+          set -euxo pipefail
+          cat > /tmp/play.sh <<'SH'
+          #!/bin/bash
+          set -euxo pipefail
+          emu=$1; tv=$2; dir="$PWD/evidence/${1}_${2}"; mkdir -p "$dir"
+          rom="$PWD/build/SLUICE_PANIC_${tv}.bin"
+          if [ "$emu" = gopher ]; then
+            /tmp/gopher2600 play -record -recordFilename="$dir/controller.rec" "$rom" > "$dir/emulator.log" 2>&1 &
+          else
+            stella -type F6 -format "$tv" -fullscreen 0 -video software "$rom" > "$dir/emulator.log" 2>&1 &
+          fi
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          sleep 5
+          kill -0 "$pid"
+          xwininfo -root -tree > "$dir/windows.txt"
+          win=$(xdotool search --onlyvisible --name "Stella" | tail -1)
+          test -n "$win"
+          xdotool windowfocus --sync "$win"
+          shot(){ import -window "$win" "$dir/$1.png"; }
+          press(){ xdotool keydown "$1"; sleep 0.14; xdotool keyup "$1"; sleep 0.15; }
+          shot title
+          press space; sleep 1; shot classic
+          press space; press Down; press space; press Up; shot ports
+          sleep 9; shot late_classic
+          sleep 12; shot after_wait
+          press F1; shot after_select
+          press space; sleep 1; shot next_game
+          press Down; press space; press F2; sleep 1; shot reset
+          xdotool key Escape; sleep 0.5
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" || true
+          sha256sum "$dir"/*.png > "$dir/screens.sha256"
+          SH
+          chmod +x /tmp/play.sh
+          export SDL_AUDIODRIVER=dummy LIBGL_ALWAYS_SOFTWARE=1
+          for emu in stella; do
+            for tv in NTSC PAL; do
+              xvfb-run -a -s '-screen 0 1024x768x24' /tmp/play.sh "$emu" "$tv"
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: closure-${{ matrix.candidate }}
+          path: |
+            evidence/
+            build/
