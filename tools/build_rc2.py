@@ -82,7 +82,7 @@ engine=engine.replace("    sta level\n    sta speed\n    lda #8","""    sta leve
 StandardStart:
     lda #8""")
 # RC3: latch SELECT on every Update; only allow fresh presses outside play and RESET.
-engine=engine.replace("ResetInput:\\n    lda SWCHB", """SelectInput:
+engine=engine.replace("ResetInput:\n    lda SWCHB", """SelectInput:
     lda SWCHB
     and #2
     bne SelectReleased
@@ -106,8 +106,8 @@ SelectReleased:
     lda #0
     sta selectHeld
 ResetInput:
-    lda SWCHB""").replace("beq ResetInput\\n    dec bonusTimer", "beq SelectInput\\n    dec bonusTimer")
-assert "beq SelectInput\\n    dec bonusTimer" in engine
+    lda SWCHB""").replace("beq ResetInput\n    dec bonusTimer", "beq SelectInput\n    dec bonusTimer")
+assert "beq SelectInput\n    dec bonusTimer" in engine
 assert engine.count("SelectInput:")==1 and engine.count("SelectReleased:")==1
 engine=engine.replace("    cmp #12\n    bcc BaseStep\n    txa","""    cmp #12
     bcc BaseStep
