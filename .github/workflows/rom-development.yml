@@ -91,8 +91,21 @@ jobs:
           curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
           unzip -o /tmp/stella.zip -d /tmp/stella-core
           for tv in NTSC PAL; do
-            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv"
+            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv" --stress-frames 100000
           done
+      - name: Gopher2600 secondary emulator smoke test
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          mkdir -p build/gopher
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          sha256sum /tmp/gopher2600 > build/gopher/core.sha256
+          /tmp/gopher2600 version | tee build/gopher/version.txt
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_NTSC.bin" | tee build/gopher/NTSC_add.log
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_PAL.bin" | tee build/gopher/PAL_add.log
+          /tmp/gopher2600 regress run | tee build/gopher/run.log
       - name: Archive exact checked-out source and checksums
         if: always()
         run: |
