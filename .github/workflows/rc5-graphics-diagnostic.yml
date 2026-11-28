@@ -1,9 +1,9 @@
-name: RC5 graphics R2 native and headless evidence
+name: RC5 graphics R3 native and headless evidence
 on:
   push:
     branches: [graphics/rc5-redesign-campaign]
     paths:
-      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R2.zip'
+      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip'
       - '.github/workflows/rc5-graphics-diagnostic.yml'
   workflow_dispatch:
 jobs:
@@ -15,12 +15,12 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y dasm curl unzip ffmpeg libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+          sudo apt-get install -y dasm
           python -m pip install Pillow
       - name: Extract and verify
         run: |
           mkdir -p rc5-graphics-output
-          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R2.zip -d rc5-graphics-output
+          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip -d rc5-graphics-output
           cd rc5-graphics-output
           sha256sum -c SHA256SUMS.txt
       - name: Native DASM two builds and CPU subset audit
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R2-native-DASM-build
+          name: RC5-R3-native-DASM-build
           path: rc5-graphics-output/build/
       - name: Actual Stella libretro
         timeout-minutes: 3
@@ -75,5 +75,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R2-diagnostic-evidence
+          name: RC5-R3-diagnostic-evidence
           path: rc5-graphics-output/
