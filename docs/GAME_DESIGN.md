@@ -1,5 +1,5 @@
-# SLUICE PANIC! — RC3 game design and player manual
-Status: developer release candidate; independent verification and release approval separate.
+# SLUICE PANIC! — RC4 game design and player manual
+Status: byte-identical LAB D integration target; bounded independent verification of LAB D, RC4 acceptance gated on native hash proof. No commercial release.
 
 ## Player controls
 You keep a four-channel sluice station. Open gates for yellow cargo; shut gates for red debris. Both travel left to right. Solid gate means closed; short end caps mean open. The white keeper marks your selection; inactive channels are grey.
@@ -18,5 +18,5 @@ Classic starts level 1 with two active lanes; level 2 adds lane 3, level 3 adds 
 TIA AUD0 input: AUDF 20/8/16, AUDC 4, V5. AUD1 game events: higher event ID wins; two independent channels. Stepped pitch from EventFreq minus remaining timer low 2 bits; tail volume 4, stop volume 0. No music.
 
 ## Build and architecture
-From repository root with native DASM and Python 3: `python tools/build_rc2.py build` (historical generator filename retained; on RC3 branch generates RC3). Builds NTSC/PAL standard 16,384-byte F6 ROMs, four 4 KiB banks, no extra cartridge RAM or processor. Bank0 engine, bank1 display, bank2 cached HUD, bank3 presentation. Shared trampolines at $FFC0; hotspots $FFF6–$FFF9; bank switches in blanking, not visible kernel. 128 bytes RIOT RAM, 97 allocated, stack reserve $E8–$FF. NTSC 262 / PAL 312 target lines; 76 CPU cycles per line. Original src/main.asm is the frozen RC1 input to generator, not final standalone F6 build.
-Tests: `python tests/rc2_cpu.py` (actual ROM, approximate RIOT bus); `python tests/rc3_regression.py /path/to/stella_libretro.so build` (requires build/rc2-baseline exact RC2 ROM/symbols); `python tests/stella_libretro.py --help`. See CI for full build, baseline and repeat. No independent/hardware/human claims.
+From repository root with native DASM and Python 3: `python tools/build_rc2.py build` (historical generator filename retained; on RC4 branch generates the exact LAB D ROM). Builds NTSC/PAL standard 16,384-byte F6 ROMs, four 4 KiB banks, no extra cartridge RAM or processor. Bank0 engine, bank1 display, bank2 cached HUD and active presentation, bank3 retained legacy presentation image (not called during normal frames). Shared trampolines at $FFC0; hotspots $FFF6–$FFF9; bank switches in blanking, not visible kernel. 128 bytes RIOT RAM, 91 allocated, 13 unallocated $DB–$E7, 24-byte stack reserve $E8–$FF. NTSC 262 / PAL 312 target lines; 76 CPU cycles per line. Original src/main.asm is the frozen RC1 input to generator, not final standalone F6 build.
+Tests: `python tests/rc2_cpu.py` (actual ROM, approximate RIOT bus); `python tests/rc3_regression.py /path/to/stella_libretro.so build` (requires build/rc2-baseline exact RC2 ROM/symbols); `python tests/stella_libretro.py --help`. Historical RC2/RC3 tests are retained for provenance; use the RC4 CI gate for acceptance, not obsolete layout assumptions. See RC4_TECHNICAL.md for bounded independent LAB D evidence and remaining physical/human gates. Four normal bank transitions/frame.

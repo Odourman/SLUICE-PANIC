@@ -1,130 +1,104 @@
-name: ROM development RC3 F6
+name: RC4 exact product integration gate
 on:
   push:
-    branches: ['feature/rc3-final-correction-polish']
+    branches: ['release/rc4-final-verified']
   pull_request:
+    branches: ['feature/rc3-final-correction-polish']
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   build:
+    if: github.ref == 'refs/heads/release/rc4-final-verified' || github.head_ref == 'release/rc4-final-verified'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/checkout@v4
-        with:
-          ref: 50261be68d02bb6fbae63229c54a27cac847ccf8
-          path: rc2-frozen
-      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils ffmpeg curl unzip
-      - run: python -m pip install py65==1.2.0 Pillow
-      - name: Build and reproduce
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Native toolchain
         run: |
-          set -o pipefail
-          mkdir -p build rc1
-          dasm src/main.asm -f3 -DTV=0 -orc1/NTSC.bin
-          dasm src/main.asm -f3 -DTV=1 -orc1/PAL.bin
-          echo '1b7168d6a08a8122a92ac5c70b3d1056e2fae34c2c8a7bba0b312e0d88134d3f  rc1/NTSC.bin' | sha256sum -c
-          echo 'a773b43f16c65e05c341949062f844dc547cefadcfd69bfaac38f7c97b70770b  rc1/PAL.bin' | sha256sum -c
-          (cd rc2-frozen && python tools/build_rc2.py build)
-          mkdir -p build/rc2-baseline
-          cp rc2-frozen/build/SLUICE*.bin rc2-frozen/build/*.sym build/rc2-baseline/
-          echo 'a1375c014861c5b9d9efff844bcd617b5db6ce29aa3023299a9ba953213349c8  build/rc2-baseline/SLUICE_PANIC_NTSC.bin' | sha256sum -c
-          echo 'f3a7f710225619fb89e3dd0ae74a2bbb4eeab3082f016edf93f5e26a96ac8302  build/rc2-baseline/SLUICE_PANIC_PAL.bin' | sha256sum -c
-          python tools/build_rc2.py build | tee build/build.log
-          python tools/build_rc2.py rebuild
-          cmp build/SLUICE_PANIC_NTSC.bin rebuild/SLUICE_PANIC_NTSC.bin
-          cmp build/SLUICE_PANIC_PAL.bin rebuild/SLUICE_PANIC_PAL.bin
-          sha256sum build/SLUICE*.bin | tee build/SHA256SUMS.txt
-      - name: Actual ROM CPU and timing model
+          sudo apt-get update
+          sudo apt-get install -y dasm curl unzip ffmpeg libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+          python -m pip install Pillow
+      - name: Frozen source and clean repeated builds
         run: |
-          set -o pipefail
-          python tests/rc2_cpu.py | tee build/cpu-tests.log
-      - name: Native Stella captures
-        if: always()
-        run: |
-          set -eu
-          dpkg-query -W dasm stella > build/versions.txt
-          for tv in NTSC PAL; do
-            export TV="$tv"
-            mkdir -p "build/stella/$TV"
-            xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
-              set -eu
-              export SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11
-              stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
-              pid=$!
-              trap "kill $pid 2>/dev/null || true" EXIT
-              sleep 5
-              win=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1 || true)
-              if [ -z "$win" ]; then win=$(xdotool search --onlyvisible --name "Stella|SLUICE|Atari" 2>/dev/null | tail -1 || true); fi
-              xwininfo -root -tree > "build/stella/$TV/windows.log"
-              if [ -z "$win" ]; then cat "build/stella/$TV/windows.log"; cat "build/stella/$TV/stella.log"; exit 1; fi
-              xdotool windowfocus --sync "$win"
-              import -window "$win" "build/stella/$TV/ready.png"
-              xdotool key F12
-              sleep 0.2
-              xdotool keydown space
-              sleep 0.15
-              xdotool keyup space
-              sleep 0.9
-              import -window "$win" "build/stella/$TV/gameplay.png"
-              xdotool key F12
-              sleep 0.2
-              xdotool keydown Down
-              sleep 0.18
-              xdotool keyup Down
-              xdotool key space
-              xdotool key alt+l
-              sleep 0.6
-              import -window "$win" "build/stella/$TV/stats.png"
-              xdotool key alt+l
-              sleep 13
-              import -window "$win" "build/stella/$TV/late.png"
-              xdotool key F2
-              sleep 0.2
-              import -window "$win" "build/stella/$TV/reset.png"
-              kill "$pid" || true
-              wait "$pid" || true
-            '
-          done
+          set -euxo pipefail
+          LAB=72d2ca6fc6e8f2de96f4a1cb1b897d1e05b848c3
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          git merge-base --is-ancestor "$LAB" HEAD
+          git diff --exit-code "$LAB" HEAD -- src tools tests graphics
+          git diff --name-only "$LAB" HEAD | tee /tmp/rc4-diff.txt
           python - <<'PY'
           from pathlib import Path
-          from PIL import Image
-          for p in Path("build/stella").rglob("*.png"):
-              im=Image.open(p).convert("RGB")
-              print(p,im.size,len(im.getcolors(im.width*im.height)))
+          paths=Path('/tmp/rc4-diff.txt').read_text().splitlines()
+          assert paths and all(p=='README.md' or p.startswith('docs/') or p=='.github/workflows/rom-development.yml' for p in paths), paths
           PY
-      - name: Actual Stella libretro gameplay and PCM
-        if: always()
-        run: |
-          set -eu
-          curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
-          unzip -o /tmp/stella.zip -d /tmp/stella-core
-          python tests/rc3_regression.py /tmp/stella-core/stella_libretro.so build
+          mkdir -p /tmp/rc4-a /tmp/rc4-b build
+          git archive HEAD | tar -x -C /tmp/rc4-a
+          git archive HEAD | tar -x -C /tmp/rc4-b
+          (cd /tmp/rc4-a && python tools/build_rc2.py build) | tee build/native_a.log
+          (cd /tmp/rc4-b && python tools/build_rc2.py build) | tee build/native_b.log
+          cp -a /tmp/rc4-a/build/. build/
+          cp /tmp/rc4-diff.txt build/source_diff_paths.txt
           for tv in NTSC PAL; do
-            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv" --stress-frames 1000000
+            cmp "build/SLUICE_PANIC_${tv}.bin" "/tmp/rc4-b/build/SLUICE_PANIC_${tv}.bin"
+            cp "build/SLUICE_PANIC_${tv}.bin" "build/SLUICE_PANIC_RC4_${tv}.bin"
           done
-      - name: Gopher2600 secondary emulator smoke test
-        if: always()
-        continue-on-error: true
+          python - <<'PY'
+          import hashlib,pathlib
+          root=pathlib.Path('build'); rows=[]
+          for line in pathlib.Path('docs/RC4_EXPECTED_HASHES.tsv').read_text().splitlines():
+           tv,region,size,h=line.split('\t');data=(root/f'SLUICE_PANIC_RC4_{tv}.bin').read_bytes()
+           assert len(data)==16384
+           if region!='ROM':
+            i=int(region[-1]);data=data[i*4096:(i+1)*4096]
+            assert data==(root/f'{tv}_bank{i}.bin').read_bytes()
+           assert len(data)==int(size) and hashlib.sha256(data).hexdigest()==h,(tv,region)
+           rows.append(line)
+          (root/'RC4_ROM_AND_BANK_HASHES.tsv').write_text('\n'.join(rows)+'\n')
+          PY
+          git rev-parse HEAD > build/source_commit.txt
+          git archive --format=zip HEAD > build/source.zip
+          dpkg-query -W dasm > build/tool_versions.txt
+          cp -a docs build/docs
+          cp README.md build/README.md
+      - name: Stella actual gameplay smoke both formats
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 3 -o /tmp/stella-core.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella-core.zip -d /tmp/stella-core
+          sha256sum /tmp/stella-core/stella_libretro.so > build/stella_core.sha256
+          for tv in NTSC PAL; do
+            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_RC4_$tv.bin" --sym "build/$tv.sym" --out "build/stella/$tv" --stress-frames 3600
+          done
+      - name: Gopher2600 actual deterministic smoke
         run: |
           set -euxo pipefail
           mkdir -p build/gopher
-          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          curl -fsSL --retry 3 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
           chmod +x /tmp/gopher2600
           sha256sum /tmp/gopher2600 > build/gopher/core.sha256
           /tmp/gopher2600 version | tee build/gopher/version.txt
-          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_NTSC.bin" | tee build/gopher/NTSC_add.log
-          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_PAL.bin" | tee build/gopher/PAL_add.log
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_RC4_NTSC.bin" | tee build/gopher/NTSC_add.log
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_RC4_PAL.bin" | tee build/gopher/PAL_add.log
           /tmp/gopher2600 regress run | tee build/gopher/run.log
-      - name: Archive exact checked-out source and checksums
-        if: always()
+          grep -Eiq '2 success' build/gopher/run.log
+          grep -Eiq '0 fail' build/gopher/run.log
+      - name: Record success and checksums
         run: |
-          mkdir -p build
-          git rev-parse HEAD > build/source_commit.txt
-          git archive --format=zip HEAD > build/source.zip
-          (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
+          set -euxo pipefail
+          printf '%s\n' 'PASS: two clean builds, source allowlist, all ROM/bank hashes, both actual Stella and Gopher smokes.' > build/CI_GATE_PASS.txt
+          (cd build && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: sluice-rc3-f6-build
+          name: SLUICE_PANIC_RC4_BUILD_EVIDENCE
+          path: build/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: RC4_FAILED_DIAGNOSTICS
           path: build/
