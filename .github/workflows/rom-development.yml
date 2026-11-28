@@ -1,7 +1,7 @@
-name: ROM development RC2 F6
+name: ROM development RC3 F6
 on:
   push:
-    branches: ['feature/rc2-16k-expansion']
+    branches: ['feature/rc3-final-correction-polish']
   pull_request:
   workflow_dispatch:
 jobs:
@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          ref: 50261be68d02bb6fbae63229c54a27cac847ccf8
+          path: rc2-frozen
       - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils ffmpeg curl unzip
       - run: python -m pip install py65==1.2.0 Pillow
       - name: Build and reproduce
@@ -21,6 +25,11 @@ jobs:
           dasm src/main.asm -f3 -DTV=1 -orc1/PAL.bin
           echo '1b7168d6a08a8122a92ac5c70b3d1056e2fae34c2c8a7bba0b312e0d88134d3f  rc1/NTSC.bin' | sha256sum -c
           echo 'a773b43f16c65e05c341949062f844dc547cefadcfd69bfaac38f7c97b70770b  rc1/PAL.bin' | sha256sum -c
+          (cd rc2-frozen && python tools/build_rc2.py build)
+          mkdir -p build/rc2-baseline
+          cp rc2-frozen/build/SLUICE*.bin rc2-frozen/build/*.sym build/rc2-baseline/
+          echo 'a1375c014861c5b9d9efff844bcd617b5db6ce29aa3023299a9ba953213349c8  build/rc2-baseline/SLUICE_PANIC_NTSC.bin' | sha256sum -c
+          echo 'f3a7f710225619fb89e3dd0ae74a2bbb4eeab3082f016edf93f5e26a96ac8302  build/rc2-baseline/SLUICE_PANIC_PAL.bin' | sha256sum -c
           python tools/build_rc2.py build | tee build/build.log
           python tools/build_rc2.py rebuild
           cmp build/SLUICE_PANIC_NTSC.bin rebuild/SLUICE_PANIC_NTSC.bin
@@ -90,8 +99,9 @@ jobs:
           set -eu
           curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
           unzip -o /tmp/stella.zip -d /tmp/stella-core
+          python tests/rc3_regression.py /tmp/stella-core/stella_libretro.so build
           for tv in NTSC PAL; do
-            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv" --stress-frames 100000
+            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv" --stress-frames 1000000
           done
       - name: Gopher2600 secondary emulator smoke test
         if: always()
@@ -116,5 +126,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: sluice-rc2-f6-build
+          name: sluice-rc3-f6-build
           path: build/
