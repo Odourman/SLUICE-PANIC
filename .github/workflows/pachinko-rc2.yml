@@ -1,0 +1,145 @@
+name: Pachinko RC2 diagnostic
+on:
+  push:
+    branches: ['pachinko/rc2-full-adversarial-stress']
+  pull_request:
+    branches: ['feature/rc2-16k-expansion']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        tv: [NTSC, PAL]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 50261be68d02bb6fbae63229c54a27cac847ccf8
+      - run: sudo apt-get update && sudo apt-get install -y dasm curl unzip
+      - name: Rebuild frozen source twice and gate identity
+        run: |
+          set -eux
+          git rev-parse HEAD
+          python tools/build_rc2.py build
+          python tools/build_rc2.py rebuild
+          cmp build/SLUICE_PANIC_NTSC.bin rebuild/SLUICE_PANIC_NTSC.bin
+          cmp build/SLUICE_PANIC_PAL.bin rebuild/SLUICE_PANIC_PAL.bin
+          echo 'a1375c014861c5b9d9efff844bcd617b5db6ce29aa3023299a9ba953213349c8  build/SLUICE_PANIC_NTSC.bin' | sha256sum -c
+          echo 'f3a7f710225619fb89e3dd0ae74a2bbb4eeab3082f016edf93f5e26a96ac8302  build/SLUICE_PANIC_PAL.bin' | sha256sum -c
+          mkdir -p diagnostic
+          sha256sum build/SLUICE*.bin > diagnostic/rom_hashes.txt
+          dpkg-query -W dasm > diagnostic/versions.txt
+          curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella.zip -d /tmp/stella-core
+          sha256sum /tmp/stella-core/stella_libretro.so > diagnostic/core_hash.txt
+      - name: New controller-only and source-informed campaign
+        env:
+          TV: ${{ matrix.tv }}
+        run: |
+          set -o pipefail
+          PYTHONPATH=tests python -u - <<'PY' | tee diagnostic/run.log
+          import json,random,os,collections,pathlib,struct,gzip
+          from stella_libretro import Core,mapping_for
+          tv=os.environ['TV']; out=pathlib.Path('diagnostic')
+          sym={}
+          for line in pathlib.Path('build/'+tv+'.sym').read_text().splitlines():
+              f=line.split()
+              if len(f)>1:
+                  try:sym[f[0]]=int(f[1],16)
+                  except ValueError:pass
+          def read(c):
+              r=c.memory()
+              assert r and len(r)==128
+              g=lambda k,i=0:r[(sym[k]+i)&127]
+              bcd=[g('score',i) for i in range(3)]
+              score=sum(((x>>4)*10+(x&15))*100**i for i,x in enumerate(bcd))
+              best=sum(((x>>4)*10+(x&15))*100**i for i,x in enumerate(g('sessionBest',i) for i in range(3)))
+              return dict(mode=g('mode'),variant=g('variant'),active=g('active'),keeper=g('keeper'),gates=g('gates'),lives=g('lives'),level=g('level'),score=score,bcd=bcd,best=best,kind=[g('kind',i) for i in range(4)],pos=[g('pos',i) for i in range(4)],fireHeld=g('fireHeld'),oldDir=g('oldDir'),roundN=g('roundN'),dirty=g('dirty'))
+          def violations(s):
+              v=[]
+              if s['mode'] not in (0,1,2):v.append('mode')
+              if not 2<=s['active']<=4 or not 0<=s['keeper']<s['active']:v.append('lane')
+              if not 0<=s['lives']<=3:v.append('lives')
+              if not 1<=s['level']<=255:v.append('level')
+              if s['gates'] & ~((1<<s['active'])-1):v.append('gate_mask')
+              if any(x>6 for x in s['kind']) or any(s['kind'][s['active']:]):v.append('kind')
+              if any(x>>4>9 or x&15>9 for x in s['bcd']):v.append('bcd')
+              if not 1<=s['roundN']<=8:v.append('round')
+              if s['best']<s['score']:v.append('best')
+              return v
+          dummy=dict(mode=1,variant=0,active=2,keeper=0,gates=0,lives=3,level=1,score=0,bcd=[0,0,0],best=0,kind=[0]*4,pos=[8]*4,fireHeld=0,oldDir=0,roundN=8,dirty=0)
+          assert not violations(dummy)
+          for key,value in [('lives',4),('keeper',2),('gates',8),('bcd',[255,0,0]),('roundN',0),('level',0)]:
+              assert violations(dict(dummy,**{key:value})),key
+          print('ORACLE_SYNTHETIC_CONTROLS_PASS',flush=True)
+          profiles=['random','hold_fire','idle','pulse','informed']
+          total=collections.Counter(); transitions=collections.Counter(); levels=collections.Counter(); masks=collections.Counter(); results=[]; flags=[]
+          # Paired seeds, both modes; first seed per mode/profile is qualification pilot.
+          for profile in profiles:
+            for expert in (0,1):
+              for seed in range(12):
+                budget=1800 if seed==0 else (12000 if profile=='informed' else 2400)
+                d=out/f'{profile}_{expert}_{seed}';d.mkdir()
+                c=Core('/tmp/stella-core/stella_libretro.so','build/SLUICE_PANIC_'+tv+'.bin',d,180 if seed==0 else 0)
+                m=mapping_for(c.desc);rng=random.Random(seed); last=None; local=collections.Counter(); maxlevel=0; log=bytearray(); start_ok=False; bad=None
+                try:
+                  for f in range(budget):
+                    s=last
+                    if f<12:
+                      btn={'Select'} if expert and f==4 else ({'Fire'} if f==8 else set())
+                    elif profile=='informed':
+                      btn=set()
+                      if s['mode']!=1:
+                        if not s['fireHeld']:btn={'Fire'}
+                      else:
+                        cand=[(s['pos'][j],j) for j in range(s['active']) if s['kind'][j] in (1,2) and bool(s['gates']&(1<<j))!=(s['kind'][j]==1)]
+                        if cand:
+                          _,j=max(cand)
+                          if j==s['keeper'] and not s['fireHeld']:btn={'Fire'}
+                          elif j!=s['keeper'] and s['oldDir']!=(0x20 if j<s['keeper'] else 0x10):btn={'Up' if j<s['keeper'] else 'Down'}
+                    elif profile=='random':
+                      btn={x for x,p in [('Up',.15),('Down',.15),('Fire',.28),('Select',.004),('Reset',.003)] if rng.random()<p}
+                    elif profile=='hold_fire':btn={'Fire'} if f%240<200 else ({'Reset'} if f%240==220 else set())
+                    elif profile=='pulse':btn={'Fire'} if f%12==0 else ({'Up' if (f//60)%2 else 'Down'} if f%5==0 else ({'Reset'} if f%601==0 else set()))
+                    else:btn=set()
+                    names=['Up','Down','Fire','Select','Reset']
+                    log.append(sum(1<<i for i,x in enumerate(names) if x in btn))
+                    before=c.counters['video'];c.run({m[x] for x in btn},f);s=read(c)
+                    local['frames']+=1;local['callbacks']+=c.counters['video']-before
+                    if f<12 and s['mode']==1 and s['variant']==expert and s['level']==(7 if expert else 1) and s['lives']==3:start_ok=True
+                    if f==11 and not start_ok:bad={'frame':f,'type':'pilot_start','state':s};break
+                    if s['mode']==1:
+                      local['gameplay']+=1;maxlevel=max(maxlevel,s['level']); levels[f"{profile}:{expert}:{s['level']}"]+=1;masks[f"{s['active']}:{s['gates']}"]+=1
+                    if last:
+                      transitions[f"{last['mode']}:{last['active']}->{s['mode']}:{s['active']}"]+=1
+                      if last['mode']!=1 and s['mode']==1:local['starts']+=1
+                      if 'Reset' in btn:local['reset_pressed_frames']+=1
+                      if last['mode']==1 and s['mode']==2:local['gameovers']+=1
+                    v=violations(s)
+                    if last and last['best']>s['best']:v.append('best_decrease')
+                    if v:
+                      bad={'frame':f,'type':'invariant','violations':v,'before':last,'state':s};c.snapshot(f);break
+                    last=s
+                  if seed==0:c.snapshot(f)
+                finally:
+                  c.close()
+                  with gzip.open(d/'inputs.bin.gz','wb') as z:z.write(log)
+                res=dict(profile=profile,expert=expert,seed=seed,budget=budget,qualified=start_ok,maxlevel=maxlevel,core=c.info,**local)
+                results.append(res);total.update(local)
+                if bad:
+                  flags.append(dict(profile=profile,expert=expert,seed=seed,**bad))
+                (out/'summary.json').write_text(json.dumps(dict(total=total,results=results,flags=flags,levels=levels,masks=masks,transitions=transitions),indent=2))
+                print('SESSION',json.dumps(res), 'FLAG',json.dumps(bad),flush=True)
+          print('TOTAL',json.dumps(total),'FLAGS',json.dumps(flags),flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pachinko-rc2-${{ matrix.tv }}
+          path: |
+            diagnostic/
+            build/SLUICE*.bin
