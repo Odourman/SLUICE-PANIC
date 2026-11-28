@@ -1,0 +1,2 @@
+# RC5 A2R — corrected positioning page crossing
+A2 c99e637a72f3a89816b8da8410491aeed972578e passed native and emulator smoke but actual comparison screenshot showed shifted keeper and gate. The Position loop starts F3FE and BCS at F400, incurring +1 cycle for each taken branch. A2R aligns Position to next page, no executable padding reached. A2 failed visual geometry and is retained only as evidence. Rebuild and inspect actual raster/geometry before advancing.
