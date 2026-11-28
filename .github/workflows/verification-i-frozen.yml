@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y dasm
+          sudo apt-get install -y dasm libsdl2-2.0-0 libgl1 libasound2t64 xvfb
           mkdir -p evidence
           dpkg-query -W dasm | tee evidence/dasm-version.txt
           sha256sum "$(command -v dasm)" | tee evidence/dasm-sha256.txt
