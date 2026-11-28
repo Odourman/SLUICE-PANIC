@@ -38,7 +38,12 @@ jobs:
           done
           cd ../build
           sha256sum *.bank *.bin > ROM_SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RC5-native-DASM-build
+          path: rc5-graphics-output/build/
       - name: Stella GUI capture (developer evidence only)
+        timeout-minutes: 2
         working-directory: rc5-graphics-output
         run: |
           set -eu
@@ -53,10 +58,10 @@ jobs:
               trap "kill $pid 2>/dev/null || true" EXIT
               sleep 1
               win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
-              xdotool windowfocus --sync "$win"
-              for n in $(seq 0 22); do
+              timeout 5s xdotool windowfocus "$win" || true
+              for n in $(seq 0 18); do
                 import -window "$win" "emulator/$TV/frame_$n.png"
-                sleep 0.9
+                sleep 0.65
               done
               xdotool key alt+l
               sleep 0.2
