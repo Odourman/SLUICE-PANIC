@@ -1,0 +1,54 @@
+name: RC5 R3 isolated control
+on:
+  push:
+    branches: [graphics/rc5-redesign-campaign]
+    paths: ['.github/workflows/rc5-r4-control.yml']
+jobs:
+  control:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dasm libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+          python -m pip install Pillow
+          curl -fsSL --retry 2 -o /tmp/stella-core.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella-core.zip -d /tmp/stella-core
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+      - name: Exact R3 build
+        run: |
+          mkdir control
+          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip -d control
+          cd control/src
+          mkdir -p ../build
+          for tv in 1 2; do
+            if [ "$tv" = 1 ]; then region=NTSC; else region=PAL; fi
+            dasm diagnostic.asm -f3 -DTV=$tv -o../build/$region.bank -l../build/$region.lst -s../build/$region.sym
+            for n in 1 2 3 4; do cat ../build/$region.bank; done > ../build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_$region.bin
+          done
+          cd ../build
+          echo 'f162040abe8b1d1ed331de9af297703caf18f8292e22c47c90c48483b45b6f06  SLUICE_RC5_GRAPHICS_DIAGNOSTIC_NTSC.bin' | sha256sum -c
+          echo '9b11439310dd8461cf62e379e07d85a636a81265a859b15cd3e14aa524058f2c  SLUICE_RC5_GRAPHICS_DIAGNOSTIC_PAL.bin' | sha256sum -c
+      - name: Isolated Stella processes
+        run: |
+          python graphics/RC5/r4_capture.py NTSC control
+          python graphics/RC5/r4_capture.py PAL control
+      - name: Gopher R3 control
+        if: always()
+        run: |
+          mkdir -p control/gopher
+          set -o pipefail
+          ldd /tmp/gopher2600 | tee control/gopher/ldd.txt
+          /tmp/gopher2600 version | tee control/gopher/version.txt
+          /tmp/gopher2600 regress add -frames 1180 "$PWD/control/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_NTSC.bin" | tee control/gopher/NTSC.log
+          /tmp/gopher2600 regress add -frames 1180 "$PWD/control/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_PAL.bin" | tee control/gopher/PAL.log
+          /tmp/gopher2600 regress run | tee control/gopher/run.log
+          grep -Eiq '2 success' control/gopher/run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: R3-isolated-control
+          path: control/
