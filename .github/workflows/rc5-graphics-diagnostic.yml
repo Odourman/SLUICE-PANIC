@@ -5,6 +5,7 @@ on:
     paths:
       - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip'
       - '.github/workflows/rc5-graphics-diagnostic.yml'
+      - 'graphics/RC5/stella_diagnostic.py'
   workflow_dispatch:
 jobs:
   graphics:
