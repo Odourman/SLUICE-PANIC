@@ -1,27 +1,27 @@
-name: RC5 graphics R3 native and headless evidence
+name: RC5 graphics R4 native and headless evidence
 on:
   push:
     branches: [graphics/rc5-redesign-campaign]
     paths:
-      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip'
+      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4_SOURCE.zip'
       - '.github/workflows/rc5-graphics-diagnostic.yml'
-      - 'graphics/RC5/stella_diagnostic.py'
+      - 'graphics/RC5/r4_capture_final.py'
   workflow_dispatch:
 jobs:
   graphics:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y dasm
+          sudo apt-get install -y dasm libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
           python -m pip install Pillow
       - name: Extract and verify
         run: |
           mkdir -p rc5-graphics-output
-          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R3.zip -d rc5-graphics-output
+          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R4.zip -d rc5-graphics-output
           cd rc5-graphics-output
           sha256sum -c SHA256SUMS.txt
       - name: Native DASM two builds and CPU subset audit
@@ -48,23 +48,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R3-native-DASM-build
+          name: RC5-R4-native-DASM-build
           path: rc5-graphics-output/build/
       - name: Actual Stella libretro
         timeout-minutes: 3
         run: |
           curl -fsSL --retry 2 -o /tmp/stella-core.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
           unzip -o /tmp/stella-core.zip -d /tmp/stella-core
-          python graphics/RC5/stella_diagnostic.py
+          python graphics/RC5/r4_capture_final.py NTSC rc5-graphics-output
+          python graphics/RC5/r4_capture_final.py PAL rc5-graphics-output
       - name: Gopher deterministic smoke
         timeout-minutes: 2
         run: |
           mkdir -p rc5-graphics-output/gopher
           curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
           chmod +x /tmp/gopher2600
+          set -o pipefail
+          ldd /tmp/gopher2600 | tee rc5-graphics-output/gopher/ldd.txt
           /tmp/gopher2600 version | tee rc5-graphics-output/gopher/version.txt
-          /tmp/gopher2600 regress add -frames 600 "$PWD/rc5-graphics-output/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_NTSC.bin" | tee rc5-graphics-output/gopher/NTSC_add.log
-          /tmp/gopher2600 regress add -frames 600 "$PWD/rc5-graphics-output/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_PAL.bin" | tee rc5-graphics-output/gopher/PAL_add.log
+          /tmp/gopher2600 regress add -frames 1180 "$PWD/rc5-graphics-output/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_NTSC.bin" | tee rc5-graphics-output/gopher/NTSC_add.log
+          /tmp/gopher2600 regress add -frames 1180 "$PWD/rc5-graphics-output/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_PAL.bin" | tee rc5-graphics-output/gopher/PAL_add.log
           /tmp/gopher2600 regress run | tee rc5-graphics-output/gopher/run.log
           grep -Eiq '2 success' rc5-graphics-output/gopher/run.log
           grep -Eiq '0 fail' rc5-graphics-output/gopher/run.log
@@ -76,5 +79,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R3-diagnostic-evidence
+          name: RC5-R4-diagnostic-evidence
           path: rc5-graphics-output/
