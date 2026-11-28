@@ -1,0 +1,105 @@
+name: Targeted closure emulator and fallback evidence
+on:
+  pull_request:
+    branches: ['feature/rc3-final-correction-polish']
+    paths: ['.github/workflows/verification-i-closure.yml']
+permissions:
+  contents: read
+jobs:
+  gameplay:
+    if: github.head_ref == 'verification/rc3-vs-health-lab-d-independent'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [RC3, D, B]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.candidate == 'RC3' && 'f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6' || '72d2ca6fc6e8f2de96f4a1cb1b897d1e05b848c3' }}
+          persist-credentials: false
+      - name: Reproduce pinned ROMs
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dasm libsdl2-2.0-0 libgl1 libasound2t64 xvfb xdotool imagemagick x11-utils
+          mkdir evidence
+          git rev-parse HEAD > evidence/source-commit.txt
+          if [ "$CANDIDATE" = B ]; then
+            python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/build_rc2.py'); s=p.read_text()
+          needle='.replace("digit   ds 6", "digit = lane")'
+          assert s.count(needle)==1
+          p.write_text(s.replace(needle,''))
+          PY
+            git diff > evidence/B-exact-source-reconstruction.diff
+          fi
+          python tools/build_rc2.py build | tee evidence/build.log
+          case "$CANDIDATE" in
+            RC3) N=6facbb074765f32d5ca4416beb50acfdbfc8b9b418855152ae81c722494f0b06; P=d1fd128b07d507a034f2f61cd4acf7ef1c4607c7e476c4d61503ccf3a641af49;;
+            D) N=09a208e3649fe86464120a4d6456d052aade9c2444f9f23d1da9f20f9592ce9c; P=ae456e3d6ae961ca0b5fa0af71f73cc52adfee3c6c04d31b888610e26ea3e274;;
+            B) N=6c019ca72485dd237a9949281cd56802b0209a9b40425bfba92b675066262a6b; P=$(sha256sum build/SLUICE_PANIC_PAL.bin | cut -d' ' -f1);;
+          esac
+          echo "$N  build/SLUICE_PANIC_NTSC.bin" | sha256sum -c
+          echo "$P  build/SLUICE_PANIC_PAL.bin" | sha256sum -c
+          sha256sum build/*.bin > evidence/roms.sha256
+      - name: Install independent emulators
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          curl -fsSL --retry 2 -o /tmp/stella.deb https://github.com/stella-emu/stella/releases/download/7.0/stella_7.0_amd64.deb
+          sudo apt-get install -y /tmp/stella.deb
+          /tmp/gopher2600 version | tee evidence/gopher-version.txt
+          stella -version | tee evidence/stella-version.txt
+          sha256sum /tmp/gopher2600 "$(command -v stella)" > evidence/emulators.sha256
+      - name: Controller-only GUI capture
+        run: |
+          set -euxo pipefail
+          cat > /tmp/play.sh <<'SH'
+          #!/bin/bash
+          set -euxo pipefail
+          emu=$1; tv=$2; dir="$PWD/evidence/${1}_${2}"; mkdir -p "$dir"
+          rom="$PWD/build/SLUICE_PANIC_${tv}.bin"
+          if [ "$emu" = gopher ]; then
+            /tmp/gopher2600 play -record -recordFilename="$dir/controller.rec" "$rom" > "$dir/emulator.log" 2>&1 &
+          else
+            stella -type F6 -format "$tv" -fullscreen 0 "$rom" > "$dir/emulator.log" 2>&1 &
+          fi
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          sleep 3
+          kill -0 "$pid"
+          win=$(xdotool search --onlyvisible --pid "$pid" | tail -1)
+          xdotool windowfocus --sync "$win"
+          shot(){ import -window "$win" "$dir/$1.png"; }
+          press(){ xdotool keydown "$1"; sleep 0.14; xdotool keyup "$1"; sleep 0.15; }
+          shot title
+          press space; sleep 1; shot classic
+          press space; press Down; press space; press Up; shot ports
+          sleep 9; shot late_classic
+          sleep 12; shot after_wait
+          press F1; shot after_select
+          press space; sleep 1; shot next_game
+          press Down; press space; press F2; sleep 1; shot reset
+          xdotool key Escape; sleep 0.5
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" || true
+          sha256sum "$dir"/*.png > "$dir/screens.sha256"
+          SH
+          chmod +x /tmp/play.sh
+          for emu in gopher stella; do
+            for tv in NTSC PAL; do
+              xvfb-run -a -s '-screen 0 1024x768x24' /tmp/play.sh "$emu" "$tv"
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: closure-${{ matrix.candidate }}
+          path: |
+            evidence/
+            build/
