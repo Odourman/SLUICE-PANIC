@@ -3,7 +3,7 @@ from pathlib import Path
 import sys,subprocess,hashlib,json
 a=Path("src/main.asm").read_text()
 def section(s,e):return a[a.index("\n"+s+":")+1:a.index("\n"+e+":")+1]
-head=a[:a.index("Reset:")].replace("ramEnd  ds 0","spawnGap ds 1\nobjectPtr ds 4\nthemeWater ds 1\nhudValid ds 1\nhudMode ds 1\nhudLives ds 1\nhudScore ds 3\naudioTmp ds 1\nramEnd ds 0")
+head=a[:a.index("Reset:")].replace("ramEnd  ds 0","spawnGap ds 1\nobjectPtr ds 4\nthemeWater ds 1\nhudValid ds 1\nhudMode ds 1\nhudLives ds 1\nhudScore ds 3\naudioTmp ds 1\nvariant ds 1\nselectHeld ds 1\nsessionBest ds 3\nramEnd ds 0")
 stub="""
     IF * > $FFC0
     ERR
@@ -68,6 +68,84 @@ SpawnReady:
 SetGap:
     sta spawnGap
     jsr Random""")
+# RC2 modes and skill rewards.
+engine=engine.replace("    sta level\n    sta speed\n    lda #8","""    sta level
+    sta speed
+    lda variant
+    beq StandardStart
+    lda #4
+    sta active
+    lda #7
+    sta level
+    lda #2
+    sta speed
+StandardStart:
+    lda #8""")
+engine=engine.replace("ResetReleased:\n    lda #0\n    sta resetHeld\nReadFire:","""ResetReleased:
+    lda #0
+    sta resetHeld
+    lda mode
+    cmp #1
+    beq ReadFire
+    lda SWCHB
+    and #2
+    bne SelectReleased
+    lda selectHeld
+    bne ReadFire
+    inc selectHeld
+    lda variant
+    eor #1
+    sta variant
+    jsr NewGame
+    lda #0
+    sta mode
+    jmp ReadFire
+SelectReleased:
+    lda #0
+    sta selectHeld
+ReadFire:""")
+engine=engine.replace("    cmp #12\n    bcc BaseStep\n    txa","""    cmp #12
+    bcc BaseStep
+    and #3
+    cmp #1
+    beq BaseStep
+    cmp #3
+    bne AlternateFast
+    inc stepSpeed
+    jmp BaseStep
+AlternateFast:
+    txa""")
+engine=engine.replace("    ldy #4\n    jsr EventSound\nNoBonus:","""    ldy #4
+    jsr EventSound
+    lda level
+    and #3
+    bne NoBonus
+    lda lives
+    cmp #3
+    bcs NoBonus
+    inc lives
+NoBonus:""")
+engine=engine.replace("ScoreDone:\n    rts","""ScoreDone:
+    lda score+2
+    cmp sessionBest+2
+    bcc BestDone
+    bne BestStore
+    lda score+1
+    cmp sessionBest+1
+    bcc BestDone
+    bne BestStore
+    lda score
+    cmp sessionBest
+    bcc BestDone
+BestStore:
+    lda score
+    sta sessionBest
+    lda score+1
+    sta sessionBest+1
+    lda score+2
+    sta sessionBest+2
+BestDone:
+    rts""")
 engine+=section("Masks","Times5")+section("InputFreq","ObjColor")
 display="    .byte $00\n    ORG $F01F\n"+section("Frame","NewGame").replace("jsr PrepareHUD","jsr F6HUD").replace("jsr Update","jsr F6Logic").replace("    ldy kind,x\n    lda ObjectTable,y\n    sta p1ptr","    lda objectPtr,x\n    sta p1ptr").replace("    lda #WATER\nWaterSet:","    lda themeWater\nWaterSet:")
 # Keep normal HMOVE strobe; conceal the notch with a deliberate dark separator.
@@ -75,6 +153,10 @@ old="    sta HMOVE\n"+"    nop\n"*12+"    sta HMCLR\n    sta WSYNC\n    ldx lane
 new="    sta HMOVE\n    lda #0\n    sta COLUBK\n    sta PF0\n"+"    nop\n"*8+"    sta HMCLR\n    sta WSYNC\n    ldx lane"
 assert old in display
 display=display.replace(old,new).replace("    sta gateMid\n    sta WSYNC\n    sta WSYNC\n    sta WSYNC\n    sta WSYNC","    sta gateMid\n    sta WSYNC\n    lda #$30\n    sta PF0\n    lda #4\n    sta COLUBK\n    sta WSYNC\n    sta WSYNC\n    sta WSYNC")
+# Water surface and floor highlights; preserve line count.
+display=display.replace("    lda laneWater\n    sta COLUBK\n    lda #2","    lda laneWater\n    eor #2\n    sta COLUBK\n    lda #2",1)
+display=display.replace("    lda gateMid\n    sta ENABL","    lda laneWater\n    sta COLUBK\n    lda gateMid\n    sta ENABL",1)
+display=display.replace("    sta GRP1\n    sta WSYNC\n    sta WSYNC\n    lda #2\n    sta ENABL","    sta GRP1\n    sta WSYNC\n    sta WSYNC\n    lda laneWater\n    eor #2\n    sta COLUBK\n    lda #2\n    sta ENABL",1)
 display+=section("Masks","InitialDelay")+section("ObjColor","GlyphL1")
 display+="""
     ORG $F900
@@ -131,6 +213,24 @@ HUDRefresh:
     lda score+2
     sta hudScore+2
 """).replace("    sta lifeR\n    rts","    sta lifeR\nHUDPresent:\n    jsr F6Presentation\n    rts")
+# Ready screen can display retained session record while RIGHT is held.
+hud=hud.replace("PrepareHUD:\n    lda hudValid","PrepareHUD:\n    lda mode\n    beq HUDRefresh\n    lda hudValid")
+hud=hud.replace("    sta hudScore+2\n    lda score+2","""    sta hudScore+2
+    lda mode
+    bne UseHUDScore
+    lda SWCHA
+    and #$80
+    bne UseHUDScore
+    lda sessionBest
+    sta hudScore
+    lda sessionBest+1
+    sta hudScore+1
+    lda sessionBest+2
+    sta hudScore+2
+UseHUDScore:
+    lda hudScore+2""")
+pre,post=hud.split("UseHUDScore:",1)
+hud=pre+"UseHUDScore:"+post.replace("lda score","lda hudScore")
 hud+=section("Times5","InputFreq")+a[a.index("\nGlyphL1:")+1:a.index("    ALIGN 256")]
 import re
 hud=re.sub(r"^GlyphR0:.*$","GlyphR0 = GlyphL3",hud,flags=re.M)
@@ -165,6 +265,11 @@ ArtStore:
     bpl ArtLoop
     lda mode
     bne PresentDone
+    lda SWCHA
+    and #$80
+    beq PresentDone
+    lda variant
+    bne ExpertTitle
     ldx #4
 TitleLoop:
     lda Title1,x
@@ -177,6 +282,20 @@ TitleLoop:
     sta h4,x
     dex
     bpl TitleLoop
+    rts
+ExpertTitle:
+    ldx #4
+ExpertLoop:
+    lda Expert1,x
+    sta h1,x
+    lda Expert2,x
+    sta h2,x
+    lda Expert3,x
+    sta h3,x
+    lda Expert4,x
+    sta h4,x
+    dex
+    bpl ExpertLoop
 PresentDone:
     rts
 BasePtr: .byte $00,$28,$32,$28,$46,$3C,$32
@@ -187,9 +306,12 @@ WaterThemes: .byte $B2,$B4,$D2,$D4
 WaterThemes: .byte $82,$84,$A2,$A4
     ENDIF
 """
-letters=[[7,4,7,1,7],[4,4,4,4,7],[5,5,5,5,7],[7,2,2,2,7],[7,4,4,4,7],[7,4,7,4,7]]
-rows=[[letters[0][y]<<1 for y in range(5)],[(letters[1][y]|letters[2][y]<<4) for y in range(5)],[letters[3][y]<<4 for y in range(5)],[(letters[4][y]<<5|letters[5][y]<<1) for y in range(5)]]
-pres+="\n".join("Title%d: .byte %s"%(i+1,",".join(map(str,row))) for i,row in enumerate(rows))+"\n"
+def rev(v):return ((v&1)<<2)|(v&2)|((v&4)>>2)
+def title(name,letters):
+    rows=[[letters[0][y]<<1 for y in range(5)],[(rev(letters[1][y])|rev(letters[2][y])<<4) for y in range(5)],[rev(letters[3][y])<<4 for y in range(5)],[(letters[4][y]<<5|letters[5][y]<<1) for y in range(5)]]
+    return "\n".join("%s%d: .byte %s"%(name,i+1,",".join(map(str,row))) for i,row in enumerate(rows))+"\n"
+pres+=title("Title",[[7,4,7,1,7],[4,4,4,4,7],[5,5,5,5,7],[7,2,2,2,7],[7,4,4,4,7],[7,4,7,4,7]])
+pres+=title("Expert",[[7,4,7,4,7],[5,5,2,5,5],[7,5,7,4,4],[7,4,7,4,7],[7,5,7,6,5],[7,2,2,2,2]])
 out=Path(sys.argv[1] if len(sys.argv)>1 else "build");out.mkdir(parents=True,exist_ok=True)
 for b,code in enumerate([engine,display,hud,pres]):
     (out/f"bank{b}.asm").write_text(head+"    IF ramEnd > $E0\n    ERR\n    ENDIF\n"+code+"\nBankUsedEnd:\n"+stub)
