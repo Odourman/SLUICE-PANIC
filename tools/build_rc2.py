@@ -217,7 +217,7 @@ HUDRefresh:
     sta hudScore+1
     lda score+2
     sta hudScore+2
-""").replace("    sta lifeR\n    rts","    sta lifeR\nHUDPresent:\n    jsr F6Presentation\n    rts")
+""").replace("    sta lifeR\n    rts","    sta lifeR\nHUDPresent:\n    jmp Present\n    nop")
 # Ready screen can display retained session record while RIGHT is held.
 hud=hud.replace("PrepareHUD:\n    lda hudValid","PrepareHUD:\n    lda mode\n    beq HUDRefresh\n    lda hudValid")
 hud=hud.replace("    sta hudScore+2\n    lda score+2","""    sta hudScore+2
@@ -317,6 +317,7 @@ def title(name,letters):
     return "\n".join("%s%d: .byte %s"%(name,i+1,",".join(map(str,row))) for i,row in enumerate(rows))+"\n"
 pres+=title("Title",[[7,4,7,1,7],[4,4,4,4,7],[5,5,5,5,7],[7,2,2,2,7],[7,4,4,4,7],[7,4,7,4,7]])
 pres+=title("Expert",[[7,4,7,4,7],[5,5,2,5,5],[7,5,7,4,4],[7,4,7,4,7],[7,5,7,6,5],[7,2,2,2,2]])
+hud+=pres
 out=Path(sys.argv[1] if len(sys.argv)>1 else "build");out.mkdir(parents=True,exist_ok=True)
 for b,code in enumerate([engine,display,hud,pres]):
     (out/f"bank{b}.asm").write_text(head+"    IF ramEnd > $E8\n    ERR\n    ENDIF\n"+code+"\nBankUsedEnd:\n"+stub)
