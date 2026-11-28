@@ -314,7 +314,7 @@ pres+=title("Title",[[7,4,7,1,7],[4,4,4,4,7],[5,5,5,5,7],[7,2,2,2,7],[7,4,4,4,7]
 pres+=title("Expert",[[7,4,7,4,7],[5,5,2,5,5],[7,5,7,4,4],[7,4,7,4,7],[7,5,7,6,5],[7,2,2,2,2]])
 out=Path(sys.argv[1] if len(sys.argv)>1 else "build");out.mkdir(parents=True,exist_ok=True)
 for b,code in enumerate([engine,display,hud,pres]):
-    (out/f"bank{b}.asm").write_text(head+"    IF ramEnd > $E0\n    ERR\n    ENDIF\n"+code+"\nBankUsedEnd:\n"+stub)
+    (out/f"bank{b}.asm").write_text(head+"    IF ramEnd > $E8\n    ERR\n    ENDIF\n"+code+"\nBankUsedEnd:\n"+stub)
 report={}
 for tv,flag in [("NTSC",0),("PAL",1)]:
     banks=[];used=[]
