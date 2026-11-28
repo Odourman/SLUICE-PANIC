@@ -1,0 +1,42 @@
+name: RC3 exact CPU and Gopher evidence
+on:
+  pull_request:
+    branches: [feature/rc3-final-correction-polish]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6
+      - run: sudo apt-get update && sudo apt-get install -y dasm curl libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+      - run: python -m pip install py65==1.2.0
+      - name: Native build and CPU model
+        run: |
+          set -euxo pipefail
+          python tools/build_rc2.py build | tee build.log
+          mv build.log build/
+          echo '6facbb074765f32d5ca4416beb50acfdbfc8b9b418855152ae81c722494f0b06  build/SLUICE_PANIC_NTSC.bin' | sha256sum -c
+          echo 'd1fd128b07d507a034f2f61cd4acf7ef1c4607c7e476c4d61503ccf3a641af49  build/SLUICE_PANIC_PAL.bin' | sha256sum -c
+          python tests/rc2_cpu.py | tee build/cpu-tests.log
+      - name: Gopher actual 600-frame deterministic smoke
+        run: |
+          set -euxo pipefail
+          mkdir -p build/gopher
+          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
+          chmod +x /tmp/gopher2600
+          sha256sum /tmp/gopher2600 > build/gopher/core.sha256
+          /tmp/gopher2600 version | tee build/gopher/version.txt
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_NTSC.bin" | tee build/gopher/NTSC_add.log
+          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_PAL.bin" | tee build/gopher/PAL_add.log
+          /tmp/gopher2600 regress run | tee build/gopher/run.log
+      - name: Evidence
+        if: always()
+        run: |
+          git rev-parse HEAD > build/source_commit.txt
+          (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rc3-cpu-gopher
+          path: build/

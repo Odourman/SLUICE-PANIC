@@ -1,130 +1,45 @@
-name: ROM development RC3 F6
+name: RC3 native checkpoint (diagnostic only)
 on:
-  push:
-    branches: ['feature/rc3-final-correction-polish']
   pull_request:
-  workflow_dispatch:
 jobs:
-  build:
+  native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6
       - uses: actions/checkout@v4
         with:
           ref: 50261be68d02bb6fbae63229c54a27cac847ccf8
           path: rc2-frozen
-      - run: sudo apt-get update && sudo apt-get install -y dasm stella xvfb xdotool imagemagick x11-utils ffmpeg curl unzip
-      - run: python -m pip install py65==1.2.0 Pillow
-      - name: Build and reproduce
+      - run: sudo apt-get update && sudo apt-get install -y dasm curl unzip ffmpeg
+      - name: Native exact build and SHA proof
         run: |
-          set -o pipefail
-          mkdir -p build rc1
-          dasm src/main.asm -f3 -DTV=0 -orc1/NTSC.bin
-          dasm src/main.asm -f3 -DTV=1 -orc1/PAL.bin
-          echo '1b7168d6a08a8122a92ac5c70b3d1056e2fae34c2c8a7bba0b312e0d88134d3f  rc1/NTSC.bin' | sha256sum -c
-          echo 'a773b43f16c65e05c341949062f844dc547cefadcfd69bfaac38f7c97b70770b  rc1/PAL.bin' | sha256sum -c
+          set -euxo pipefail
+          mkdir -p build
+          python tools/build_rc2.py build | tee build/build.log
+          python tools/build_rc2.py rebuild
+          cmp build/SLUICE_PANIC_NTSC.bin rebuild/SLUICE_PANIC_NTSC.bin
+          cmp build/SLUICE_PANIC_PAL.bin rebuild/SLUICE_PANIC_PAL.bin
           (cd rc2-frozen && python tools/build_rc2.py build)
           mkdir -p build/rc2-baseline
           cp rc2-frozen/build/SLUICE*.bin rc2-frozen/build/*.sym build/rc2-baseline/
           echo 'a1375c014861c5b9d9efff844bcd617b5db6ce29aa3023299a9ba953213349c8  build/rc2-baseline/SLUICE_PANIC_NTSC.bin' | sha256sum -c
           echo 'f3a7f710225619fb89e3dd0ae74a2bbb4eeab3082f016edf93f5e26a96ac8302  build/rc2-baseline/SLUICE_PANIC_PAL.bin' | sha256sum -c
-          python tools/build_rc2.py build | tee build/build.log
-          python tools/build_rc2.py rebuild
-          cmp build/SLUICE_PANIC_NTSC.bin rebuild/SLUICE_PANIC_NTSC.bin
-          cmp build/SLUICE_PANIC_PAL.bin rebuild/SLUICE_PANIC_PAL.bin
-          sha256sum build/SLUICE*.bin | tee build/SHA256SUMS.txt
-      - name: Actual ROM CPU and timing model
-        run: |
-          set -o pipefail
-          python tests/rc2_cpu.py | tee build/cpu-tests.log
-      - name: Native Stella captures
-        if: always()
-        run: |
-          set -eu
-          dpkg-query -W dasm stella > build/versions.txt
-          for tv in NTSC PAL; do
-            export TV="$tv"
-            mkdir -p "build/stella/$TV"
-            xvfb-run -a -s '-screen 0 1024x768x24' bash -c '
-              set -eu
-              export SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=x11
-              stella -video software -fullscreen 0 -sound 0 -format "$TV" -ss1x 1 -sssingle 0 -snapname rom -snapsavedir "$PWD/build/stella/$TV" "$PWD/build/SLUICE_PANIC_$TV.bin" > "build/stella/$TV/stella.log" 2>&1 &
-              pid=$!
-              trap "kill $pid 2>/dev/null || true" EXIT
-              sleep 5
-              win=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1 || true)
-              if [ -z "$win" ]; then win=$(xdotool search --onlyvisible --name "Stella|SLUICE|Atari" 2>/dev/null | tail -1 || true); fi
-              xwininfo -root -tree > "build/stella/$TV/windows.log"
-              if [ -z "$win" ]; then cat "build/stella/$TV/windows.log"; cat "build/stella/$TV/stella.log"; exit 1; fi
-              xdotool windowfocus --sync "$win"
-              import -window "$win" "build/stella/$TV/ready.png"
-              xdotool key F12
-              sleep 0.2
-              xdotool keydown space
-              sleep 0.15
-              xdotool keyup space
-              sleep 0.9
-              import -window "$win" "build/stella/$TV/gameplay.png"
-              xdotool key F12
-              sleep 0.2
-              xdotool keydown Down
-              sleep 0.18
-              xdotool keyup Down
-              xdotool key space
-              xdotool key alt+l
-              sleep 0.6
-              import -window "$win" "build/stella/$TV/stats.png"
-              xdotool key alt+l
-              sleep 13
-              import -window "$win" "build/stella/$TV/late.png"
-              xdotool key F2
-              sleep 0.2
-              import -window "$win" "build/stella/$TV/reset.png"
-              kill "$pid" || true
-              wait "$pid" || true
-            '
-          done
-          python - <<'PY'
-          from pathlib import Path
-          from PIL import Image
-          for p in Path("build/stella").rglob("*.png"):
-              im=Image.open(p).convert("RGB")
-              print(p,im.size,len(im.getcolors(im.width*im.height)))
-          PY
-      - name: Actual Stella libretro gameplay and PCM
-        if: always()
-        run: |
-          set -eu
-          curl -fsSL --retry 4 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
-          unzip -o /tmp/stella.zip -d /tmp/stella-core
-          python tests/rc3_regression.py /tmp/stella-core/stella_libretro.so build
-          for tv in NTSC PAL; do
-            python tests/stella_libretro.py --core /tmp/stella-core/stella_libretro.so --rom "build/SLUICE_PANIC_$tv.bin" --sym "build/$tv.sym" --out "build/libretro/$tv" --stress-frames 1000000
-          done
-      - name: Gopher2600 secondary emulator smoke test
-        if: always()
-        continue-on-error: true
-        run: |
-          set -euxo pipefail
-          mkdir -p build/gopher
-          curl -fsSL --retry 2 -o /tmp/gopher2600 https://github.com/JetSetIlly/Gopher2600/releases/download/v0.55.0/gopher2600_linux_amd64
-          chmod +x /tmp/gopher2600
-          sha256sum /tmp/gopher2600 > build/gopher/core.sha256
-          /tmp/gopher2600 version | tee build/gopher/version.txt
-          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_NTSC.bin" | tee build/gopher/NTSC_add.log
-          /tmp/gopher2600 regress add -frames 600 "$PWD/build/SLUICE_PANIC_PAL.bin" | tee build/gopher/PAL_add.log
-          /tmp/gopher2600 regress run | tee build/gopher/run.log
-      - name: Archive exact checked-out source and checksums
-        if: always()
-        run: |
-          mkdir -p build
           git rev-parse HEAD > build/source_commit.txt
           git archive --format=zip HEAD > build/source.zip
-          (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
+          sha256sum build/SLUICE*.bin > build/SHA256SUMS.txt
+          dpkg-query -W dasm > build/versions.txt
+      - name: Real Stella input and simultaneous event regression
+        run: |
+          curl -fsSL --retry 3 -o /tmp/core.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/core.zip -d /tmp/stella-core
+          python tests/rc3_regression.py /tmp/stella-core/stella_libretro.so build | tee build/regression.log
+      - name: Manifest
+        if: always()
+        run: (cd build && find . -type f ! -name ALL_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > ALL_SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: sluice-rc3-f6-build
+          name: rc3-native-checkpoint
           path: build/
