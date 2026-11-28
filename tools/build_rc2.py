@@ -69,7 +69,7 @@ SetGap:
     sta spawnGap
     jsr Random""")
 engine+=section("Masks","Times5")+section("InputFreq","ObjColor")
-display="    ORG $F01F\n"+section("Frame","NewGame").replace("jsr PrepareHUD","jsr F6HUD").replace("jsr Update","jsr F6Logic").replace("    ldy kind,x\n    lda ObjectTable,y\n    sta p1ptr","    lda objectPtr,x\n    sta p1ptr").replace("    lda #WATER\nWaterSet:","    lda themeWater\nWaterSet:")
+display="    .byte $00\n    ORG $F01F\n"+section("Frame","NewGame").replace("jsr PrepareHUD","jsr F6HUD").replace("jsr Update","jsr F6Logic").replace("    ldy kind,x\n    lda ObjectTable,y\n    sta p1ptr","    lda objectPtr,x\n    sta p1ptr").replace("    lda #WATER\nWaterSet:","    lda themeWater\nWaterSet:")
 # Keep normal HMOVE strobe; conceal the notch with a deliberate dark separator.
 old="    sta HMOVE\n"+"    nop\n"*12+"    sta HMCLR\n    sta WSYNC\n    ldx lane"
 new="    sta HMOVE\n    lda #0\n    sta COLUBK\n    sta PF0\n"+"    nop\n"*8+"    sta HMCLR\n    sta WSYNC\n    ldx lane"
@@ -192,7 +192,7 @@ rows=[[letters[0][y]<<1 for y in range(5)],[(letters[1][y]|letters[2][y]<<4) for
 pres+="\n".join("Title%d: .byte %s"%(i+1,",".join(map(str,row))) for i,row in enumerate(rows))+"\n"
 out=Path(sys.argv[1] if len(sys.argv)>1 else "build");out.mkdir(parents=True,exist_ok=True)
 for b,code in enumerate([engine,display,hud,pres]):
-    (out/f"bank{b}.asm").write_text(head+code+"\nBankUsedEnd:\n"+stub)
+    (out/f"bank{b}.asm").write_text(head+"    IF ramEnd > $E0\n    ERR\n    ENDIF\n"+code+"\nBankUsedEnd:\n"+stub)
 report={}
 for tv,flag in [("NTSC",0),("PAL",1)]:
     banks=[];used=[]
