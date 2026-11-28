@@ -1,11 +1,11 @@
-name: RC5 graphics R4 native and headless evidence
+name: RC5 graphics R4B native and headless evidence
 on:
   push:
     branches: [graphics/rc5-redesign-campaign]
     paths:
-      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4_SOURCE.zip'
+      - 'graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4B_SOURCE.zip'
       - '.github/workflows/rc5-graphics-diagnostic.yml'
-      - 'graphics/RC5/r4_capture_final.py'
+      - 'graphics/RC5/r4b_capture_final.py'
   workflow_dispatch:
 jobs:
   graphics:
@@ -21,7 +21,7 @@ jobs:
       - name: Extract and verify
         run: |
           mkdir -p rc5-graphics-output
-          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4_SOURCE.zip -d rc5-graphics-output
+          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4B_SOURCE.zip -d rc5-graphics-output
           cd rc5-graphics-output
           sha256sum -c SHA256SUMS.txt
       - name: Native DASM two builds and CPU subset audit
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R4-native-DASM-build
+          name: RC5-R4B-native-DASM-build
           path: rc5-graphics-output/build/
       - name: Actual Stella libretro
         timeout-minutes: 3
@@ -71,6 +71,13 @@ jobs:
           /tmp/gopher2600 regress run | tee rc5-graphics-output/gopher/run.log
           grep -Eiq '2 success' rc5-graphics-output/gopher/run.log
           grep -Eiq '0 fail' rc5-graphics-output/gopher/run.log
+      - name: Gopher frameinfo diagnostic (bounded supplemental)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          for tv in NTSC PAL; do
+            { printf 'HELP STEP\nHELP FRAMEINFO\n'; for n in $(seq 1 8); do printf 'STEP FRAME\nFRAMEINFO\n'; done; printf 'QUIT\n'; } | timeout 12 /tmp/gopher2600 headless "$PWD/rc5-graphics-output/build/SLUICE_RC5_GRAPHICS_DIAGNOSTIC_$tv.bin" > "rc5-graphics-output/gopher/${tv}_frameinfo.log" 2>&1 || true
+          done
       - name: Manifest
         if: always()
         run: |
@@ -79,5 +86,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: RC5-R4-diagnostic-evidence
+          name: RC5-R4B-diagnostic-evidence
           path: rc5-graphics-output/
