@@ -107,6 +107,7 @@ def mapping_for(desc):
 def main():
  p=argparse.ArgumentParser()
  for n in ("core","rom","sym","out"):p.add_argument("--"+n,required=True)
+ p.add_argument('--stress-frames',type=int,default=3600)
  a=p.parse_args();out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
  sym={}
  for l in pathlib.Path(a.sym).read_text().splitlines():
@@ -118,22 +119,31 @@ def main():
  print("CORE",c.info,"INPUT",m,flush=True)
  from PIL import Image
  import subprocess
- video=None; seen=set(); samples=[]; events=[]; best=0; start=0; stop=3600; died=False; restart=False
+ video=None; seen=set(); samples=[]; events=[]; best=0; start=0; stop=a.stress_frames; died=False; restart=False; sessions=0; random_frames=0; classic_seen=False; expert_seen=False
+ import random
+ rng=random.Random(2600)
  def state():
   ram=c.memory();assert ram and len(ram)>=128, "RIOT RAM unavailable"
   def g(k,i=0):return ram[(sym[k]+i)&127]
   sc=sum(((g("score",i)>>4)*10+(g("score",i)&15))*100**i for i in range(3))
-  return dict(mode=g("mode"),lives=g("lives"),active=g("active"),keeper=g("keeper"),gates=g("gates"),level=g("level"),score=sc,kind=[g("kind",i) for i in range(4)],pos=[g("pos",i) for i in range(4)],fireHeld=g("fireHeld"),oldDir=g("oldDir"),bonus=g("bonusTimer"))
+  return dict(variant=g("variant"),mode=g("mode"),lives=g("lives"),active=g("active"),keeper=g("keeper"),gates=g("gates"),level=g("level"),score=sc,kind=[g("kind",i) for i in range(4)],pos=[g("pos",i) for i in range(4)],fireHeld=g("fireHeld"),oldDir=g("oldDir"),bonus=g("bonusTimer"))
  def snap(tag,f):
   if tag in seen:return
   seen.add(tag);fn=c.snapshot(f)
   if fn:(out/fn).rename(out/(tag+".png"))
- for f in range(5400):
+ for f in range(stop+3600):
   buttons=set()
-  if f==15:buttons={"Fire"}
+  if f in (5,10):buttons={"Select"}
+  elif f==15:buttons={"Fire"}
   elif f>20:
    s=state()
-   if f<stop and s["mode"]==1:
+   if f<stop and s["mode"]!=1:
+    if not s["fireHeld"]:buttons={"Fire"}
+   elif f<stop and stop>20000 and f>=stop-10000:
+    random_frames+=1
+    if f%751==0:buttons={"Reset"}
+    elif f%6==0:buttons={rng.choice(["Up","Down","Fire"])}
+   elif f<stop and s["mode"]==1:
     candidates=[(s["pos"][j],j) for j in range(s["active"]) if s["kind"][j] in (1,2) and bool(s["gates"]&(1<<j))!=(s["kind"][j]==1)]
     if candidates:
      _,j=max(candidates);k=s["keeper"]
@@ -142,11 +152,17 @@ def main():
       d=0x20 if j<k else 0x10
       if s["oldDir"]!=d:buttons={"Up" if j<k else "Down"}
    elif f>stop and s["mode"]==2 and not restart:
-    died=True;snap("game_over",f);buttons={"Fire"};restart=True
+    died=True;buttons={"Fire"};restart=True
+  before=state() if f else None
   c.run({m[x] for x in buttons},f)
   s=state();best=max(best,s["level"])
+  assert 0<=s["keeper"]<s["active"]<=4 and 0<=s["lives"]<=3 and s["mode"] in (0,1,2) and all(k<=6 for k in s["kind"]),s
+  if before and before["mode"]!=1 and s["mode"]==1:sessions+=1
+  if before and before["mode"]==0 and before["variant"]==1:expert_seen=True;snap("expert_ready",f)
+  if before and before["mode"]==0 and before["variant"]==0:classic_seen=True
+  if before and before["mode"]==2 and restart:snap("game_over",f)
   if buttons:events.append([f,sorted(buttons)])
-  if f==10:snap("ready",f)
+  if f==13:snap("ready",f)
   if s["mode"]==1:
    start+=1
    if f>40:snap("gameplay",f)
@@ -165,7 +181,7 @@ def main():
     video=subprocess.Popen(["ffmpeg","-loglevel","error","-y","-f","rawvideo","-pix_fmt","rgb24","-s","640x480","-r",str(fps),"-i","-","-an","-c:v","libx264","-pix_fmt","yuv420p",str(out/"silent.mp4")],stdin=subprocess.PIPE)
    video.stdin.write(im.tobytes())
   if restart and s["mode"]==1:
-   snap("restart",f);break
+   f+=1;c.run(set(),f);s=state();snap("restart",f);break
   if f==stop-1:snap("late_gameplay",f)
  c.close()
  if video:
@@ -174,7 +190,7 @@ def main():
   (out/"silent.mp4").unlink()
  with wave.open(str(out/"tia_audio.wav"),"rb") as w:
   pcm=w.readframes(w.getnframes());peak=max(abs(v[0]) for v in struct.iter_unpack("<h",pcm))
- result={"core":c.info,"frames":f+1,"video_callbacks":c.counters["video"],"audio_samples":c.counters["audio_samples"],"pcm_peak":peak,"max_level":best,"active_gameplay_frames":start,"game_over":died,"restart":restart and s["mode"]==1,"snapshots":sorted(seen),"last_state":s}
+ result={"core":c.info,"frames":f+1,"video_callbacks":c.counters["video"],"audio_samples":c.counters["audio_samples"],"pcm_peak":peak,"max_level":best,"active_gameplay_frames":start,"game_over":died,"restart":restart and s["mode"]==1,"snapshots":sorted(seen),"last_state":s,"sessions":sessions,"random_gameplay_frames":random_frames,"classic_ready":classic_seen,"expert_ready":expert_seen}
  (out/"result.json").write_text(json.dumps(result,indent=2));(out/"samples.json").write_text(json.dumps(samples));(out/"inputs.json").write_text(json.dumps(events));print("RESULT",json.dumps(result),flush=True)
- assert start>100 and best>=3 and died and restart and s["mode"]==1 and peak>0,result
+ assert start>100 and best>=3 and died and restart and s["mode"]==1 and peak>0 and classic_seen and expert_seen and c.counters["video"]==f+1 and f+1>=stop,result
 if __name__=="__main__":main()
