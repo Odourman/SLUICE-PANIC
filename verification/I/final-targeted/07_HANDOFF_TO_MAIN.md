@@ -1,0 +1,9 @@
+# MAIN handoff — FINAL TARGETED VERIFICATION & CLOSURE
+
+**RECOMMEND_LAB_D_FOR_PRODUCT_INTEGRATION**
+
+Recommend MAIN authorize integration of the exact frozen LAB D only, with the same source and ROM bytes, no other feature changes in the integration scope. NTSC 09a208e3649fe86464120a4d6456d052aade9c2444f9f23d1da9f20f9592ce9c; PAL ae456e3d6ae961ca0b5fa0af71f73cc52adfee3c6c04d31b888610e26ea3e274. Preserve RC3 as official candidate until MAIN makes separate integration decision. B fallback exactly independently reproduced, but no advantage over D for current alias evidence.
+
+D: 4 vs6 bank transitions/frame, 91 vs97 bytes allocated, 13 vs7 unallocated before E8 stack reserve. Do NOT allocate the newly freed six bytes. Do not change spawnGap, movement, object lifetimes or level rules without redoing the natural single-outcome proof and timing. New two-case shared forced-state 263-line NTSC warning SP-VER-011 is real but source invariant excludes simultaneous four unresolved object arrivals in normal game. Conservative reachable-state first-poll margin D NTSC VB811/OS664 cycles, PAL2731/2533; visible segments max67/76. Raw full bus sample and new independent core support current alias, bank and timing. Actual Gopher controller differential all three exact, Stella7 actual GUI evidence. See full closure report, source proof, updated matrix/findings and exact bank hashes. No claim of unconditional hardware certification.
+
+Before commercial release: original 2600 and RetroN77 physical tests both TV formats where supported, human playtest/balance. Prior protocol remains in checkpoint 06_PHYSICAL_PLAYTEST.md. Keep experimental/verification branches separate. PR8 draft is evidence only; no merge or release performed. If integration is separately authorized, verify resulting source and ROM hashes against exact D before accepting; do not integrate control mutants or verification tools as game code.
