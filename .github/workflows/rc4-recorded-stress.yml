@@ -1,0 +1,136 @@
+name: RC4 isolated recorded gameplay stress
+on:
+  push:
+    branches: ['verification/rc4-gameplay-video-20261128']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recorded:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        tv: [NTSC, PAL]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify frozen source and build exact ROM
+        run: |
+          set -euxo pipefail
+          git diff --exit-code cef328950e82a86b104cb05226f6f6e02d170553 HEAD -- src tools tests graphics
+          sudo apt-get update
+          sudo apt-get install -y dasm ffmpeg curl unzip libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
+          python -m pip install Pillow
+          python tools/build_rc2.py build
+          echo "$(awk -F '\t' '$1=="${{ matrix.tv }}" && $2=="ROM" {print $4}' docs/RC4_EXPECTED_HASHES.tsv)  build/SLUICE_PANIC_${{ matrix.tv }}.bin" | sha256sum -c -
+          curl -fsSL --retry 3 -o /tmp/stella.zip https://buildbot.libretro.com/nightly/linux/x86_64/latest/stella_libretro.so.zip
+          unzip -o /tmp/stella.zip -d /tmp/stella
+      - name: Record real emulator output throughout each scenario
+        env:
+          TV: ${{ matrix.tv }}
+        run: |
+          set -euxo pipefail
+          mkdir -p recording
+          cat >/tmp/record_rc4.py <<'PY'
+          import sys, os, pathlib, json, random, hashlib, subprocess, wave, struct
+          from PIL import Image
+          sys.path.insert(0,str(pathlib.Path('tests').resolve()))
+          from stella_libretro import Core, mapping_for
+          tv=os.environ['TV']
+          sym={}
+          for l in pathlib.Path(f'build/{tv}.sym').read_text().splitlines():
+              a=l.split()
+              if len(a)>1:
+                  try: sym[a[0]]=int(a[1],16)
+                  except ValueError: pass
+          rom=pathlib.Path(f'build/SLUICE_PANIC_{tv}.bin')
+          for scenario,variant,seconds in [('classic_strategy',0,90),('expert_strategy',1,90),('expert_input_stress',1,120),('classic_failure_restart',0,60)]:
+              out=pathlib.Path('recording')/scenario
+              out.mkdir()
+              n=seconds*(60 if tv=='NTSC' else 50)
+              c=Core('/tmp/stella/stella_libretro.so',str(rom),out,n)
+              m=mapping_for(c.desc)
+              fps=c.info['fps']
+              rng=random.Random(2600)
+              def state():
+                  ram=c.memory()
+                  def g(k,i=0): return ram[(sym[k]+i)&127]
+                  sc=sum(((g('score',i)>>4)*10+(g('score',i)&15))*100**i for i in range(3))
+                  return dict(mode=g('mode'),variant=g('variant'),lives=g('lives'),active=g('active'),keeper=g('keeper'),gates=g('gates'),level=g('level'),score=sc,kind=[g('kind',i) for i in range(4)],pos=[g('pos',i) for i in range(4)],fireHeld=g('fireHeld'),oldDir=g('oldDir'),bonus=g('bonusTimer'))
+              v=subprocess.Popen(['ffmpeg','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s','320x240','-r',str(fps),'-i','-','-an','-c:v','libx264','-preset','ultrafast','-crf','18','-pix_fmt','yuv420p',str(out/'silent.mp4')],stdin=subprocess.PIPE)
+              events=[]; samples=[]; errors=[]; transitions=[]; maxlevel=0; maxscore=0; active=0; maxobjects=0; starts=0; losses=0; gameovers=0; restarts=0; variants=set(); prior=None
+              try:
+                  for f in range(n):
+                      s=state() if f else None
+                      b=set()
+                      if f==5 and variant: b={'Select'}
+                      elif f==15: b={'Fire'}
+                      elif f>20:
+                          if s['mode']!=1:
+                              if not s['fireHeld'] and f%12==0: b={'Fire'}
+                          elif scenario=='expert_input_stress':
+                              q=f%600
+                              if f%997==0: b={'Reset','Select','Fire'}
+                              elif q<150: b={'Up','Fire'} if f%2==0 else {'Down'}
+                              elif q<300: b={'Down','Fire'}
+                              elif q<450: b={'Up','Down','Fire','Select'}
+                              else: b={x for x in ['Up','Down','Fire','Select'] if rng.random()<0.5}
+                          elif scenario=='classic_failure_restart' and f<n//2:
+                              b=set()
+                          else:
+                              candidates=[(s['pos'][j],j) for j in range(s['active']) if s['kind'][j] in (1,2) and bool(s['gates']&(1<<j))!=(s['kind'][j]==1)]
+                              if candidates:
+                                  _,j=max(candidates)
+                                  if j==s['keeper'] and not s['fireHeld']: b={'Fire'}
+                                  elif j!=s['keeper']:
+                                      d=0x20 if j<s['keeper'] else 0x10
+                                      if s['oldDir']!=d: b={'Up' if j<s['keeper'] else 'Down'}
+                      c.run({m[x] for x in b},f)
+                      t=state()
+                      if not (0<=t['keeper']<t['active']<=4 and 0<=t['lives']<=3 and t['mode'] in (0,1,2) and all(k<=6 for k in t['kind'])): errors.append({'frame':f,'state':t})
+                      if t['mode']==1:
+                          active+=1; variants.add(t['variant']); maxlevel=max(maxlevel,t['level']); maxscore=max(maxscore,t['score']); maxobjects=max(maxobjects,sum(k!=0 for k in t['kind'][:t['active']]))
+                      if prior:
+                          if prior['mode']!=t['mode']:
+                              transitions.append({'frame':f,'before':prior['mode'],'after':t['mode'],'variant':t['variant']})
+                              starts+=int(t['mode']==1)
+                              gameovers+=int(t['mode']==2)
+                              restarts+=int(prior['mode']==2 and t['mode']==1)
+                          losses+=int(prior['mode']==1 and t['lives']<prior['lives'])
+                      prior=t
+                      events.append([f,sorted(b)])
+                      if f%60==0: samples.append({'frame':f,**t})
+                      if c.pixels is None: raise RuntimeError('missing initial video callback')
+                      fmt={1:'BGRX',2:'BGR;16',0:'BGR;15'}[c.pixfmt]
+                      im=Image.frombytes('RGB',(c.width,c.height),c.pixels,'raw',fmt,c.pitch,1)
+                      v.stdin.write(im.resize((320,240),Image.Resampling.NEAREST).tobytes())
+              finally:
+                  c.close(); v.stdin.close()
+                  if v.wait()!=0: raise RuntimeError('video encoder failed')
+              subprocess.run(['ffmpeg','-loglevel','error','-y','-i',str(out/'silent.mp4'),'-i',str(out/'tia_audio.wav'),'-c:v','copy','-c:a','aac','-shortest',str(out/'gameplay.mp4')],check=True)
+              (out/'silent.mp4').unlink()
+              with wave.open(str(out/'tia_audio.wav'),'rb') as w:
+                  pcm=w.readframes(w.getnframes()); peak=max((abs(x[0]) for x in struct.iter_unpack('<h',pcm)),default=0)
+              result=dict(scenario=scenario,expected_variant=variant,observed_variants=sorted(variants),core=c.info,frames=n,active_frames=active,video_callbacks=c.counters['video'],audio_samples=c.counters['audio_samples'],pcm_peak=peak,max_level=maxlevel,max_score=maxscore,max_simultaneous_objects=maxobjects,starts=starts,life_losses=losses,gameovers=gameovers,restarts=restarts,invariant_violations=errors,transitions=transitions)
+              (out/'result.json').write_text(json.dumps(result,indent=2))
+              (out/'inputs.json').write_text(json.dumps(events))
+              (out/'samples.json').write_text(json.dumps(samples))
+              print(json.dumps(result),flush=True)
+          PY
+          python /tmp/record_rc4.py
+      - name: Evidence hashes
+        if: always()
+        run: |
+          git rev-parse HEAD > recording/source_commit.txt
+          git rev-parse cef328950e82a86b104cb05226f6f6e02d170553 > recording/frozen_source_commit.txt
+          (cd recording && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RC4_RECORDED_STRESS_${{ matrix.tv }}
+          path: recording/
+          if-no-files-found: error
