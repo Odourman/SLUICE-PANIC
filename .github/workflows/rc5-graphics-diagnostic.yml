@@ -21,7 +21,7 @@ jobs:
       - name: Extract and verify
         run: |
           mkdir -p rc5-graphics-output
-          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_II_R4.zip -d rc5-graphics-output
+          unzip -q graphics/RC5/SLUICE_PANIC_RC5_GRAPHICS_DIAGNOSTIC_R4_SOURCE.zip -d rc5-graphics-output
           cd rc5-graphics-output
           sha256sum -c SHA256SUMS.txt
       - name: Native DASM two builds and CPU subset audit
