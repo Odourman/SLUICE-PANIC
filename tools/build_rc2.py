@@ -81,29 +81,34 @@ engine=engine.replace("    sta level\n    sta speed\n    lda #8","""    sta leve
     sta speed
 StandardStart:
     lda #8""")
-engine=engine.replace("ResetReleased:\n    lda #0\n    sta resetHeld\nReadFire:","""ResetReleased:
-    lda #0
-    sta resetHeld
-    lda mode
-    cmp #1
-    beq ReadFire
+# RC3: latch SELECT on every Update; only allow fresh presses outside play and RESET.
+engine=engine.replace("ResetInput:\\n    lda SWCHB", """SelectInput:
     lda SWCHB
     and #2
     bne SelectReleased
     lda selectHeld
-    bne ReadFire
+    bne ResetInput
     inc selectHeld
+    lda mode
+    cmp #1
+    beq ResetInput
+    lda SWCHB
+    and #1
+    beq ResetInput
     lda variant
     eor #1
     sta variant
     jsr NewGame
     lda #0
     sta mode
-    jmp ReadFire
+    jmp ResetInput
 SelectReleased:
     lda #0
     sta selectHeld
-ReadFire:""")
+ResetInput:
+    lda SWCHB""").replace("beq ResetInput\\n    dec bonusTimer", "beq SelectInput\\n    dec bonusTimer")
+assert "beq SelectInput\\n    dec bonusTimer" in engine
+assert engine.count("SelectInput:")==1 and engine.count("SelectReleased:")==1
 engine=engine.replace("    cmp #12\n    bcc BaseStep\n    txa","""    cmp #12
     bcc BaseStep
     and #3
