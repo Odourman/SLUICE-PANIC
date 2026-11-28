@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: f4c3a0ffd39373f1ed2a7b6cdaab7287e8a180a6
-      - run: sudo apt-get update && sudo apt-get install -y dasm curl
+      - run: sudo apt-get update && sudo apt-get install -y dasm curl libsdl2-2.0-0 libsdl2-ttf-2.0-0 libgl1
       - run: python -m pip install py65==1.2.0
       - name: Native build and CPU model
         run: |
